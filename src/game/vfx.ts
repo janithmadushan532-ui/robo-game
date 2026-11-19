@@ -88,6 +88,7 @@ export class VfxManager {
   private meteors: MeteorDrop[] = [];
   private transferOrbs: TransferOrb[] = [];
   public projectiles: ActiveProjectile[] = [];
+  public particleBudgetScale = 1.0;
 
   private sharedParticleGeo = new THREE.DodecahedronGeometry(0.14, 0);
   private sharedRingGeo = new THREE.RingGeometry(0.7, 1.0, 28);
@@ -255,6 +256,7 @@ export class VfxManager {
     scale = 1.0,
     gravity = 9.0,
   ) {
+    const targetCount = Math.max(3, Math.round(count * this.particleBudgetScale));
     let spawned = 0;
     for (const p of this.particles) {
       if (p.active) continue;
@@ -279,7 +281,7 @@ export class VfxManager {
       );
 
       spawned++;
-      if (spawned >= count) break;
+      if (spawned >= targetCount) break;
     }
   }
 

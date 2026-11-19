@@ -409,6 +409,7 @@ export function buildArenaForLevel(
   levelDef: BossLevelDef,
   maxAniso: number,
   enableShadows: boolean,
+  isMobile = false,
 ): BuiltArena {
   const cfg = THEME_CONFIGS[levelDef.arenaTheme];
   scene.background = new THREE.Color(cfg.skyColor);
@@ -418,8 +419,8 @@ export function buildArenaForLevel(
   const animatedProps: THREE.Object3D[] = [];
   const disposables: { dispose: () => void }[] = [];
 
-  // 1. Lighting Rig (Warm Key + Cool Hemi + Accent Rim)
-  const hemi = new THREE.HemisphereLight(cfg.ambientSky, cfg.ambientGround, 0.85);
+  // 1. Lighting Rig (Warm Key + Cool Hemi + Accent Rim; avoid PointLight fragment cost on mobile)
+  const hemi = new THREE.HemisphereLight(cfg.ambientSky, cfg.ambientGround, isMobile ? 0.98 : 0.85);
   hemi.position.set(0, 30, 0);
   group.add(hemi);
 
@@ -427,7 +428,8 @@ export function buildArenaForLevel(
   keyLight.position.set(10, 18, 12);
   if (enableShadows) {
     keyLight.castShadow = true;
-    keyLight.shadow.mapSize.set(1024, 1024);
+    const shadowRes = isMobile ? 512 : 1024;
+    keyLight.shadow.mapSize.set(shadowRes, shadowRes);
     keyLight.shadow.camera.near = 2;
     keyLight.shadow.camera.far = 48;
     const d = 14;
@@ -440,16 +442,18 @@ export function buildArenaForLevel(
   }
   group.add(keyLight);
 
-  const rimLight = new THREE.DirectionalLight(cfg.accentLight, 1.15);
+  const rimLight = new THREE.DirectionalLight(cfg.accentLight, isMobile ? 1.45 : 1.15);
   rimLight.position.set(-10, 10, -12);
   group.add(rimLight);
 
-  const centerUnderLight = new THREE.PointLight(cfg.accentLight, 2.2, 24, 1.5);
-  centerUnderLight.position.set(0, 3.5, 0);
-  group.add(centerUnderLight);
+  if (!isMobile) {
+    const centerUnderLight = new THREE.PointLight(cfg.accentLight, 2.2, 24, 1.5);
+    centerUnderLight.position.set(0, 3.5, 0);
+    group.add(centerUnderLight);
+  }
 
-  // 2. Extended Surroundings Ground Plane (No floating box void!)
-  const outerGroundGeo = new THREE.CircleGeometry(95, 48);
+  // 2. Extended Surroundings Ground Plane
+  const outerGroundGeo = new THREE.CircleGeometry(95, isMobile ? 28 : 48);
   outerGroundGeo.rotateX(-Math.PI / 2);
   const outerGroundMat = new THREE.MeshStandardMaterial({
     color: cfg.skyColor,
@@ -466,7 +470,12 @@ export function buildArenaForLevel(
   const floorTex = createArenaFloorTexture(levelDef.arenaTheme, maxAniso);
   disposables.push(floorTex);
 
-  const deckGeo = new THREE.CylinderGeometry(ARENA_RADIUS + 0.4, ARENA_RADIUS + 1.1, 0.55, 32);
+  const deckGeo = new THREE.CylinderGeometry(
+    ARENA_RADIUS + 0.4,
+    ARENA_RADIUS + 1.1,
+    0.55,
+    isMobile ? 24 : 32,
+  );
   const deckMat = new THREE.MeshStandardMaterial({
     map: floorTex,
     roughness: 0.42,
@@ -479,7 +488,7 @@ export function buildArenaForLevel(
   disposables.push(deckGeo, deckMat);
 
   // Glowing Arena Rim Bevel Ring
-  const rimGeo = new THREE.TorusGeometry(ARENA_RADIUS + 0.35, 0.14, 10, 48);
+  const rimGeo = new THREE.TorusGeometry(ARENA_RADIUS + 0.35, 0.14, 8, isMobile ? 32 : 48);
   rimGeo.rotateX(Math.PI / 2);
   const rimMat = new THREE.MeshStandardMaterial({
     color: cfg.rimColor,
@@ -493,7 +502,7 @@ export function buildArenaForLevel(
   group.add(rimMesh);
   disposables.push(rimGeo, rimMat);
 
-  // 4. Boxing/Fighting Ring Corner Pylons & Energy Ropes
+  // 4. Boxing/Fighting Ring Corner Pylons & Energy Ropes (shared geometry for zero waste)
   const pylonCount = 8;
   const pylonGeo = new THREE.CylinderGeometry(0.18, 0.24, 2.35, 8);
   const pylonCapGeo = new THREE.OctahedronGeometry(0.24, 0);
@@ -522,7 +531,7 @@ export function buildArenaForLevel(
 
     const pylon = new THREE.Mesh(pylonGeo, pylonMat);
     pylon.position.set(px, 1.15, pz);
-    pylon.castShadow = enableShadows;
+    pylon.castShadow = enableShadows && !isMobile;
     group.add(pylon);
 
     const cap = new THREE.Mesh(pylonCapGeo, rimMat);
@@ -531,45 +540,43 @@ export function buildArenaForLevel(
     animatedProps.push(cap);
   }
 
-  // Two tiers of energy ring ropes between adjacent pylons
+  // Two tiers of energy ring ropes sharing a single cylinder geometry
+  const ropeDist = pylonPositions[0].distanceTo(pylonPositions[1]);
+  const sharedRopeGeo = new THREE.CylinderGeometry(0.032, 0.032, ropeDist, 6);
+  sharedRopeGeo.rotateX(Math.PI / 2);
+  disposables.push(sharedRopeGeo);
+
   const ropeHeights = [0.75, 1.45];
   for (let i = 0; i < pylonCount; i++) {
     const p1 = pylonPositions[i];
     const p2 = pylonPositions[(i + 1) % pylonCount];
-    const dist = p1.distanceTo(p2);
     const midX = (p1.x + p2.x) * 0.5;
     const midZ = (p1.z + p2.z) * 0.5;
     const rotY = Math.atan2(p2.x - p1.x, p2.z - p1.z);
 
     for (const h of ropeHeights) {
-      const ropeGeo = new THREE.CylinderGeometry(0.032, 0.032, dist, 6);
-      ropeGeo.rotateX(Math.PI / 2);
-      const rope = new THREE.Mesh(ropeGeo, ropeMat);
+      const rope = new THREE.Mesh(sharedRopeGeo, ropeMat);
       rope.position.set(midX, h, midZ);
       rope.rotation.y = rotY;
       group.add(rope);
-      disposables.push(ropeGeo);
     }
   }
 
-  // 5. Outer Perimeter Scenery Pillars / Crystals / Rock Outcrops
-  const outerCount = 14;
+  // 5. Outer Perimeter Scenery Pillars / Crystals / Rock Outcrops (shared geometries across variants)
+  const outerCount = isMobile ? 10 : 14;
   const propMat = new THREE.MeshStandardMaterial({
     color: cfg.propColor,
     roughness: 0.65,
     metalness: 0.28,
   });
-  disposables.push(propMat);
+  const sharedCrystalGeo = new THREE.OctahedronGeometry(0.45, 0);
+  disposables.push(propMat, sharedCrystalGeo);
 
-  for (let i = 0; i < outerCount; i++) {
-    const ang = (i / outerCount) * Math.PI * 2 + 0.15;
-    const dist = 16.5 + (i % 3) * 3.8;
-    const x = Math.cos(ang) * dist;
-    const z = Math.sin(ang) * dist;
-    const h = 4.2 + (i % 4) * 2.1;
-
+  const t = levelDef.arenaTheme;
+  const variantGeos: THREE.BufferGeometry[] = [];
+  for (let v = 0; v < 4; v++) {
+    const h = 4.2 + v * 2.1;
     let geo: THREE.BufferGeometry;
-    const t = levelDef.arenaTheme;
     if (
       t === 'cryo' ||
       t === 'glacier_peak' ||
@@ -589,7 +596,7 @@ export function buildArenaForLevel(
       t === 'dragon_caldera' ||
       t === 'titan_canyon'
     ) {
-      geo = new THREE.DodecahedronGeometry(1.4 + (i % 2) * 0.6, 0);
+      geo = new THREE.DodecahedronGeometry(1.4 + (v % 2) * 0.6, 0);
     } else if (
       t === 'cobalt_citadel' ||
       t === 'cyber_citadel' ||
@@ -603,9 +610,19 @@ export function buildArenaForLevel(
     } else {
       geo = new THREE.CylinderGeometry(0.65, 0.95, h, 8);
     }
+    variantGeos.push(geo);
     disposables.push(geo);
+  }
 
-    const mesh = new THREE.Mesh(geo, propMat);
+  for (let i = 0; i < outerCount; i++) {
+    const ang = (i / outerCount) * Math.PI * 2 + 0.15;
+    const dist = 16.5 + (i % 3) * 3.8;
+    const x = Math.cos(ang) * dist;
+    const z = Math.sin(ang) * dist;
+    const variantIdx = i % 4;
+    const h = 4.2 + variantIdx * 2.1;
+
+    const mesh = new THREE.Mesh(variantGeos[variantIdx], propMat);
     mesh.position.set(
       x,
       t === 'volcanic' || t === 'magma_forge' || t === 'molten_core' || t === 'dragon_caldera'
@@ -619,19 +636,16 @@ export function buildArenaForLevel(
     }
     group.add(mesh);
 
-    // Glowing rune band / crystal crown on every second monolith
     if (i % 2 === 0) {
-      const crystalGeo = new THREE.OctahedronGeometry(0.45, 0);
-      const crystal = new THREE.Mesh(crystalGeo, rimMat);
+      const crystal = new THREE.Mesh(sharedCrystalGeo, rimMat);
       crystal.position.set(x, h * 0.92 + 0.4, z);
       group.add(crystal);
       animatedProps.push(crystal);
-      disposables.push(crystalGeo);
     }
   }
 
   // Floating Astral / Arena Overhead Ring Halo
-  const haloGeo = new THREE.TorusGeometry(ARENA_RADIUS + 2.5, 0.12, 8, 48);
+  const haloGeo = new THREE.TorusGeometry(ARENA_RADIUS + 2.5, 0.12, 8, isMobile ? 32 : 48);
   haloGeo.rotateX(Math.PI / 2);
   const halo = new THREE.Mesh(haloGeo, ropeMat);
   halo.position.y = 8.5;

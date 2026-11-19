@@ -34,9 +34,14 @@ export interface EngineCallbacks {
 // Pre-allocated math helpers for zero GC in animation loop
 const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
+const _v3 = new THREE.Vector3();
+const _v4 = new THREE.Vector3();
 const _dir = new THREE.Vector3();
 const _origin = new THREE.Vector3();
 const _targetVec = new THREE.Vector3();
+const _camFwd = new THREE.Vector3();
+const _camRight = new THREE.Vector3();
+const _moveWorld = new THREE.Vector3();
 const _camDesiredPos = new THREE.Vector3();
 const _camDesiredLook = new THREE.Vector3();
 
@@ -94,6 +99,7 @@ interface EnemyEntity {
   strafeTimer: number;
   flankAngle: number;
   extraPowers: MonsterPowerId[];
+  combinedPowers: MonsterPowerId[];
   alive: boolean;
   phase: 1 | 2 | 3;
   maxPhases: 1 | 2 | 3;
@@ -138,6 +144,7 @@ export class ArenaEngine {
   private arena: BuiltArena | null = null;
   private armorTex: THREE.Texture;
   private shadowTex: THREE.Texture;
+  private envMap: THREE.Texture | null = null;
   private sharedShadowGeo: THREE.PlaneGeometry;
   private sharedTeleGeo: THREE.RingGeometry;
 
@@ -163,6 +170,9 @@ export class ArenaEngine {
   // Input state
   private keysHeld = new Set<string>();
   private joyVec = { x: 0, y: 0 };
+  private bufferedAttack = false;
+  private playerComboStep = 0;
+  private comboChainTimer = 0;
 
   // Combat state
   private playerSlotPowers: (PowerId | null)[] = [null, null, null, null];
@@ -210,7 +220,8 @@ export class ArenaEngine {
     container.appendChild(this.renderer.domElement);
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.envMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environment = this.envMap;
     pmrem.dispose();
 
     const maxAniso = this.renderer.capabilities.getMaxAnisotropy();
@@ -224,6 +235,7 @@ export class ArenaEngine {
     this.sharedTeleGeo.rotateX(-Math.PI / 2);
 
     this.vfx = new VfxManager(this.scene);
+    this.vfx.particleBudgetScale = this.getParticleBudgetScale();
 
     // Player Rig & Contact Shadow
     this.playerRig = createPlayerFighterRig(this.armorTex);
@@ -287,18 +299,46 @@ export class ArenaEngine {
     };
   }
 
+  private getParticleBudgetScale(): number {
+    if (this.isSoftwareGl) return 0.45;
+    if (this.isCoarsePointer) {
+      return this.graphicsQuality === 'high' ? 0.65 : this.graphicsQuality === 'medium' ? 0.5 : 0.36;
+    }
+    return this.graphicsQuality === 'high' ? 1.0 : this.graphicsQuality === 'medium' ? 0.78 : 0.5;
+  }
+
   private applyQualityToRenderer() {
     if (this.isSoftwareGl) {
       this.renderer.setPixelRatio(1);
       this.renderer.shadowMap.enabled = false;
+      if (this.vfx) this.vfx.particleBudgetScale = this.getParticleBudgetScale();
       return;
     }
-    const highCap = this.isCoarsePointer ? 1.5 : 2;
-    const maxDpr =
-      this.graphicsQuality === 'high' ? highCap : this.graphicsQuality === 'medium' ? 1.25 : 1;
+    const maxDpr = this.isCoarsePointer
+      ? this.graphicsQuality === 'high'
+        ? 1.2
+        : this.graphicsQuality === 'medium'
+        ? 1.0
+        : 0.8
+      : this.graphicsQuality === 'high'
+      ? 2
+      : this.graphicsQuality === 'medium'
+      ? 1.25
+      : 1;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxDpr));
-    this.renderer.shadowMap.enabled = this.graphicsQuality !== 'low';
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    const shadowsOn = this.isCoarsePointer
+      ? this.graphicsQuality === 'high'
+      : this.graphicsQuality !== 'low';
+    this.renderer.shadowMap.enabled = shadowsOn;
+    this.renderer.shadowMap.type =
+      !this.isCoarsePointer && this.graphicsQuality === 'high'
+        ? THREE.PCFSoftShadowMap
+        : THREE.PCFShadowMap;
+
+    if (this.vfx) {
+      this.vfx.particleBudgetScale = this.getParticleBudgetScale();
+    }
   }
 
   public setGraphicsQuality(q: GraphicsQuality) {
@@ -426,6 +466,7 @@ export class ArenaEngine {
         strafeTimer: 1.4 + i * 0.4,
         flankAngle,
         extraPowers: [],
+        combinedPowers: [...spec.signaturePowers],
         alive: true,
         phase: 1,
         maxPhases: this.computeMaxPhases(spec, levelDef),
@@ -446,8 +487,16 @@ export class ArenaEngine {
     this.vfx.clearProjectiles();
 
     const maxAniso = this.renderer.capabilities.getMaxAnisotropy();
-    const shadowsEnabled = !this.isSoftwareGl && this.graphicsQuality !== 'low';
-    this.arena = buildArenaForLevel(this.scene, levelDef, maxAniso, shadowsEnabled);
+    const shadowsEnabled =
+      !this.isSoftwareGl &&
+      (this.isCoarsePointer ? this.graphicsQuality === 'high' : this.graphicsQuality !== 'low');
+    this.arena = buildArenaForLevel(
+      this.scene,
+      levelDef,
+      maxAniso,
+      shadowsEnabled,
+      this.isCoarsePointer,
+    );
 
     const initialSpecs = buildEnemySpecsFromLevel(levelDef);
     this.survivalWaveQueue = [initialSpecs, ...(levelDef.survivalWaves ?? [])];
@@ -501,10 +550,15 @@ export class ArenaEngine {
       e.telegraphLabel = null;
       e.telegraphRing.visible = false;
       e.extraPowers = [];
+      e.combinedPowers = [...e.spec.signaturePowers];
     }
 
     this.ultimateCharge = 25;
     this.comboCount = 0;
+    this.comboResetTimer = 0;
+    this.playerComboStep = 0;
+    this.comboChainTimer = 0;
+    this.bufferedAttack = false;
     this.timeSlowTimer = 0;
     this.phaseBanner = null;
     this.phaseBannerTimer = 0;
@@ -520,11 +574,17 @@ export class ArenaEngine {
   public configureMatchLoadout(
     slotPowers: (PowerId | null)[],
     monsterPowers: MonsterPowerId[],
+    collectedPowers: PowerId[] = [],
   ) {
     this.playerSlotPowers = [...slotPowers];
     const uniqueEarned: PowerId[] = [];
     for (const p of slotPowers) {
       if (p && !uniqueEarned.includes(p)) {
+        uniqueEarned.push(p);
+      }
+    }
+    for (const p of collectedPowers) {
+      if (p && p !== 'ultimate' && !uniqueEarned.includes(p)) {
         uniqueEarned.push(p);
       }
     }
@@ -545,6 +605,10 @@ export class ArenaEngine {
       if (this.enemies.length > 0) {
         this.enemies[m % this.enemies.length].extraPowers.push(monsterPowers[m]);
       }
+    }
+    for (let i = 0; i < this.enemies.length; i++) {
+      const e = this.enemies[i];
+      e.combinedPowers = [...e.spec.signaturePowers, ...e.extraPowers];
     }
     this.emitHud();
   }
@@ -602,18 +666,19 @@ export class ArenaEngine {
     }
   }
 
-  public triggerPlayerAction(action: 'normal' | 'kick' | 'heavy' | 'jump' | 'dodge') {
+  public triggerPlayerAction(action: 'attack' | 'normal' | 'kick' | 'heavy' | 'jump' | 'dodge') {
     if (this.mode !== 'battle') return;
     if (this.player.stunTimer > 0 || this.player.state === 'hitstun' || this.player.state === 'defeat') return;
 
     const targetEnemy = this.getNearestLivingEnemy();
 
     if (action === 'jump') {
-      if (this.player.pos.y <= 0.06) {
+      if (this.player.pos.y <= 0.08) {
         this.player.vel.y = 8.6;
         this.player.state = 'jump';
         this.player.stateTimer = 0;
         this.player.blocking = false;
+        this.bufferedAttack = false;
         soundEngine.playJump();
         this.vfx.spawnShockRing(this.player.pos, 0x94a3b8, 1.6, 0.25);
       }
@@ -624,18 +689,18 @@ export class ArenaEngine {
       if (this.player.state === 'dodge' || this.player.energy < 10) return;
       this.player.energy -= 10;
       this.player.blocking = false;
+      this.bufferedAttack = false;
       this.player.state = 'dodge';
       this.player.stateTimer = 0;
-      this.player.stateDuration = 0.26;
+      this.player.stateDuration = 0.25;
       this.player.iFrames = 0.36;
-      const mx = this.getMoveInputX();
-      const mz = this.getMoveInputZ();
-      if (Math.abs(mx) > 0.1 || Math.abs(mz) > 0.1) {
-        _dir.set(mx, 0, mz).normalize();
+      this.getMoveInputWorldDir(_moveWorld);
+      if (_moveWorld.lengthSq() > 0.02) {
+        _dir.copy(_moveWorld).normalize();
       } else if (targetEnemy) {
         _dir.copy(this.player.pos).sub(targetEnemy.runtime.pos).setY(0).normalize();
       } else {
-        _dir.set(-1, 0, 0);
+        _dir.set(-Math.sin(this.player.rotY), 0, -Math.cos(this.player.rotY));
       }
       this.player.vel.x = _dir.x * 16.0;
       this.player.vel.z = _dir.z * 16.0;
@@ -649,32 +714,92 @@ export class ArenaEngine {
       this.player.state === 'attack_normal' ||
       this.player.state === 'attack_kick' ||
       this.player.state === 'attack_heavy' ||
-      this.player.state === 'cast_power' ||
-      this.player.state === 'ultimate'
+      this.player.state === 'dodge'
     ) {
+      if (
+        action === 'attack' &&
+        this.player.stateTimer >= this.player.stateDuration * 0.42
+      ) {
+        this.bufferedAttack = true;
+      }
+      return;
+    }
+
+    if (this.player.state === 'cast_power' || this.player.state === 'ultimate') {
       return;
     }
 
     this.player.blocking = false;
-    if (targetEnemy) {
+    this.bufferedAttack = false;
+    this.getMoveInputWorldDir(_moveWorld);
+    const distToEnemy = targetEnemy ? this.player.pos.distanceTo(targetEnemy.runtime.pos) : Infinity;
+
+    if (targetEnemy && distToEnemy <= 6.5) {
+      this.faceTarget(this.player, targetEnemy.runtime.pos);
+      _dir.copy(targetEnemy.runtime.pos).sub(this.player.pos).setY(0).normalize();
+    } else if (_moveWorld.lengthSq() > 0.02) {
+      _dir.copy(_moveWorld).normalize();
+      this.player.rotY = Math.atan2(_dir.x, _dir.z);
+    } else if (targetEnemy) {
       this.faceTarget(this.player, targetEnemy.runtime.pos);
       _dir.copy(targetEnemy.runtime.pos).sub(this.player.pos).setY(0).normalize();
     } else {
       _dir.set(Math.sin(this.player.rotY), 0, Math.cos(this.player.rotY));
     }
 
+    if (action === 'attack') {
+      const step = this.comboChainTimer > 0 ? (this.playerComboStep + 1) % 4 : 0;
+      this.playerComboStep = step;
+      this.comboChainTimer = 1.15;
+
+      if (step === 0) {
+        this.player.comboStep = 0;
+        this.player.state = 'attack_normal';
+        this.player.stateTimer = 0;
+        this.player.stateDuration = 0.25;
+        this.player.attackHitApplied = false;
+        this.player.vel.x = _dir.x * 5.6;
+        this.player.vel.z = _dir.z * 5.6;
+      } else if (step === 1) {
+        this.player.comboStep = 2;
+        this.player.state = 'attack_normal';
+        this.player.stateTimer = 0;
+        this.player.stateDuration = 0.27;
+        this.player.attackHitApplied = false;
+        this.player.vel.x = _dir.x * 6.0;
+        this.player.vel.z = _dir.z * 6.0;
+      } else if (step === 2) {
+        this.player.comboStep = 0;
+        this.player.state = 'attack_kick';
+        this.player.stateTimer = 0;
+        this.player.stateDuration = 0.34;
+        this.player.attackHitApplied = false;
+        this.player.vel.x = _dir.x * 6.6;
+        this.player.vel.z = _dir.z * 6.6;
+      } else {
+        this.player.comboStep = 0;
+        this.player.state = 'attack_heavy';
+        this.player.stateTimer = 0;
+        this.player.stateDuration = 0.44;
+        this.player.attackHitApplied = false;
+        this.player.vel.x = _dir.x * 7.2;
+        this.player.vel.z = _dir.z * 7.2;
+      }
+      return;
+    }
+
     if (action === 'normal') {
       this.player.comboStep = (this.player.comboStep + 1) % 3;
       this.player.state = 'attack_normal';
       this.player.stateTimer = 0;
-      this.player.stateDuration = 0.29;
+      this.player.stateDuration = 0.28;
       this.player.attackHitApplied = false;
-      this.player.vel.x = _dir.x * 5.2;
-      this.player.vel.z = _dir.z * 5.2;
+      this.player.vel.x = _dir.x * 5.4;
+      this.player.vel.z = _dir.z * 5.4;
     } else if (action === 'kick') {
       this.player.state = 'attack_kick';
       this.player.stateTimer = 0;
-      this.player.stateDuration = 0.38;
+      this.player.stateDuration = 0.36;
       this.player.attackHitApplied = false;
       this.player.vel.x = _dir.x * 6.4;
       this.player.vel.z = _dir.z * 6.4;
@@ -683,7 +808,7 @@ export class ArenaEngine {
       this.player.energy -= 14;
       this.player.state = 'attack_heavy';
       this.player.stateTimer = 0;
-      this.player.stateDuration = 0.54;
+      this.player.stateDuration = 0.52;
       this.player.attackHitApplied = false;
       this.player.vel.x = _dir.x * 6.2;
       this.player.vel.z = _dir.z * 6.2;
@@ -997,11 +1122,11 @@ export class ArenaEngine {
       case 'mega_laser': {
         _targetVec.copy(targetEnemy.runtime.pos).setY(1.35);
         this.vfx.spawnLaserBeam(_origin, _targetVec, def.hexColor);
-        this.vfx.spawnLaserBeam(
-          _origin.clone().add(_v1.set(0, 0.3, 0)),
-          _targetVec.clone().add(_v2.set(0, 0.3, 0)),
-          0xfacc15,
-        );
+        _v3.copy(_origin);
+        _v3.y += 0.3;
+        _v4.copy(_targetVec);
+        _v4.y += 0.3;
+        this.vfx.spawnLaserBeam(_v3, _v4, 0xfacc15);
         this.vfx.spawnBurst(_targetVec, def.hexColor, 20, 8, 1.25, 4);
         for (const e of this.getLivingEnemies()) {
           if (e === targetEnemy || e.runtime.pos.distanceTo(targetEnemy.runtime.pos) < 3.4) {
@@ -1196,18 +1321,37 @@ export class ArenaEngine {
     this.emitHud();
   }
 
-  private getMoveInputX(): number {
+  private getMoveInputWorldDir(out: THREE.Vector3): THREE.Vector3 {
     let x = this.joyVec.x;
     if (this.keysHeld.has('KeyA') || this.keysHeld.has('ArrowLeft')) x -= 1;
     if (this.keysHeld.has('KeyD') || this.keysHeld.has('ArrowRight')) x += 1;
-    return THREE.MathUtils.clamp(x, -1, 1);
-  }
 
-  private getMoveInputZ(): number {
     let z = this.joyVec.y;
     if (this.keysHeld.has('KeyW') || this.keysHeld.has('ArrowUp')) z -= 1;
     if (this.keysHeld.has('KeyS') || this.keysHeld.has('ArrowDown')) z += 1;
-    return THREE.MathUtils.clamp(z, -1, 1);
+
+    x = THREE.MathUtils.clamp(x, -1, 1);
+    z = THREE.MathUtils.clamp(z, -1, 1);
+
+    if (Math.abs(x) < 0.04 && Math.abs(z) < 0.04) {
+      return out.set(0, 0, 0);
+    }
+
+    this.camera.getWorldDirection(_camFwd);
+    _camFwd.y = 0;
+    if (_camFwd.lengthSq() < 0.0001) {
+      _camFwd.set(0, 0, -1);
+    } else {
+      _camFwd.normalize();
+    }
+    // Screen right is fwd x up = (-fz, 0, fx); joystick up (z < 0) moves along +_camFwd
+    _camRight.set(-_camFwd.z, 0, _camFwd.x);
+
+    out.set(0, 0, 0).addScaledVector(_camRight, x).addScaledVector(_camFwd, -z);
+    if (out.lengthSq() > 1) {
+      out.normalize();
+    }
+    return out;
   }
 
   private faceTarget(actor: FighterRuntime, targetPos: THREE.Vector3) {
@@ -1373,8 +1517,7 @@ export class ArenaEngine {
     this.updateCamera(dt);
 
     this.hudEmitAccum += dt;
-    if (this.mode === 'battle' && this.hudEmitAccum >= 0.06) {
-      this.hudEmitAccum = 0;
+    if (this.mode === 'battle' && this.hudEmitAccum >= 0.08) {
       this.emitHud();
     }
   }
@@ -1424,6 +1567,10 @@ export class ArenaEngine {
     if (this.comboResetTimer > 0) {
       this.comboResetTimer -= dt;
       if (this.comboResetTimer <= 0) this.comboCount = 0;
+    }
+    if (this.comboChainTimer > 0) {
+      this.comboChainTimer -= dt;
+      if (this.comboChainTimer <= 0) this.playerComboStep = 0;
     }
 
     if (this.timeSlowTimer > 0) {
@@ -1527,12 +1674,14 @@ export class ArenaEngine {
     const p = this.player;
     p.stateTimer += dt;
     const nearest = this.getNearestLivingEnemy();
+    const boostMult = (p.speedBoostTimer > 0 ? 1.48 : 1.0) * (p.rageTimer > 0 ? 1.25 : 1.0);
+    const speed = (p.blocking ? 2.8 : 7.4) * boostMult;
 
     if (p.state === 'attack_normal' || p.state === 'attack_kick' || p.state === 'attack_heavy') {
-      const hitAt = p.state === 'attack_normal' ? 0.12 : p.state === 'attack_kick' ? 0.17 : 0.26;
+      const hitAt = p.state === 'attack_normal' ? 0.11 : p.state === 'attack_kick' ? 0.16 : 0.24;
       if (!p.attackHitApplied && p.stateTimer >= hitAt) {
         p.attackHitApplied = true;
-        const reach = p.state === 'attack_normal' ? 3.05 : p.state === 'attack_kick' ? 3.3 : 3.5;
+        const reach = p.state === 'attack_normal' ? 3.1 : p.state === 'attack_kick' ? 3.35 : 3.55;
         const fwdX = Math.sin(p.rotY);
         const fwdZ = Math.cos(p.rotY);
         let hitAny = false;
@@ -1561,29 +1710,44 @@ export class ArenaEngine {
           soundEngine.playDodge();
         }
       }
+
+      // Allow partial locomotion steering during attacks so movement never feels locked up
+      this.getMoveInputWorldDir(_moveWorld);
+      if (_moveWorld.lengthSq() > 0.02) {
+        const atkSpeed = speed * 0.45;
+        p.vel.x = THREE.MathUtils.lerp(p.vel.x, _moveWorld.x * atkSpeed, 1 - Math.exp(-10 * dt));
+        p.vel.z = THREE.MathUtils.lerp(p.vel.z, _moveWorld.z * atkSpeed, 1 - Math.exp(-10 * dt));
+      }
+
       if (p.stateTimer >= p.stateDuration) {
         p.state = 'idle';
+        if (this.bufferedAttack) {
+          this.bufferedAttack = false;
+          this.triggerPlayerAction('attack');
+        }
       }
       return;
     }
 
     if (p.state === 'dodge' || p.state === 'cast_power' || p.state === 'ultimate' || p.state === 'hitstun') {
       if (p.stateTimer >= p.stateDuration) {
+        const wasDodge = p.state === 'dodge';
         p.state = 'idle';
+        if (wasDodge && this.bufferedAttack) {
+          this.bufferedAttack = false;
+          this.triggerPlayerAction('attack');
+        }
       }
       return;
     }
 
-    const mx = this.getMoveInputX();
-    const mz = this.getMoveInputZ();
-    const boostMult = (p.speedBoostTimer > 0 ? 1.48 : 1.0) * (p.rageTimer > 0 ? 1.25 : 1.0);
-    const speed = (p.blocking ? 2.8 : 7.0) * boostMult;
-    const hasMove = Math.abs(mx) > 0.05 || Math.abs(mz) > 0.05;
+    this.getMoveInputWorldDir(_moveWorld);
+    const hasMove = _moveWorld.lengthSq() > 0.002;
 
     if (hasMove) {
-      _v2.set(mx, 0, mz).normalize().multiplyScalar(speed);
-      p.vel.x = THREE.MathUtils.lerp(p.vel.x, _v2.x, 1 - Math.exp(-15 * dt));
-      p.vel.z = THREE.MathUtils.lerp(p.vel.z, _v2.z, 1 - Math.exp(-15 * dt));
+      _v2.copy(_moveWorld).multiplyScalar(speed);
+      p.vel.x = THREE.MathUtils.lerp(p.vel.x, _v2.x, 1 - Math.exp(-16 * dt));
+      p.vel.z = THREE.MathUtils.lerp(p.vel.z, _v2.z, 1 - Math.exp(-16 * dt));
       if (p.pos.y <= 0.05 && !p.blocking) p.state = 'move';
       if (p.blocking && nearest) {
         this.faceTarget(p, nearest.runtime.pos);
@@ -1760,7 +1924,7 @@ export class ArenaEngine {
         return false;
       }
 
-      const combinedPowers: MonsterPowerId[] = [...spec.signaturePowers, ...enemy.extraPowers];
+      const combinedPowers = enemy.combinedPowers;
       const useExtraChance = enemy.extraPowers.length > 0 ? 0.42 : 0;
       const usePowerChance =
         style === 'ranged_laser'
@@ -1889,11 +2053,11 @@ export class ArenaEngine {
       _targetVec.copy(this.player.pos).setY(1.25);
       this.vfx.spawnLaserBeam(_origin, _targetVec, pDef.hexColor);
       if (act === 'mega_laser') {
-        this.vfx.spawnLaserBeam(
-          _origin.clone().add(_v1.set(0, 0.35, 0)),
-          _targetVec.clone().add(_v2.set(0, 0.35, 0)),
-          0xfacc15,
-        );
+        _v3.copy(_origin);
+        _v3.y += 0.35;
+        _v4.copy(_targetVec);
+        _v4.y += 0.35;
+        this.vfx.spawnLaserBeam(_v3, _v4, 0xfacc15);
       }
       this.vfx.spawnBurst(_targetVec, pDef.hexColor, 14, 6.5, 1.0, 4);
       if (this.player.iFrames <= 0) {
@@ -2180,6 +2344,9 @@ export class ArenaEngine {
             this.enemies[m % this.enemies.length].extraPowers.push(this.monsterExtraPowers[m]);
           }
         }
+        for (const e of this.enemies) {
+          e.combinedPowers = [...e.spec.signaturePowers, ...e.extraPowers];
+        }
         const waveHeal = Math.round(this.player.maxHp * 0.25);
         this.player.hp = Math.min(this.player.maxHp, this.player.hp + waveHeal);
         this.player.energy = Math.min(this.player.maxEnergy, this.player.energy + 45);
@@ -2333,8 +2500,9 @@ export class ArenaEngine {
     this.camera.position.lerp(_camDesiredPos, dampAlpha);
 
     if (this.cameraShake > 0.004) {
-      this.camera.position.x += (Math.random() - 0.5) * this.cameraShake;
-      this.camera.position.y += (Math.random() - 0.5) * this.cameraShake * 0.65;
+      const shakeAmt = this.isCoarsePointer ? Math.min(0.18, this.cameraShake) : this.cameraShake;
+      this.camera.position.x += (Math.random() - 0.5) * shakeAmt;
+      this.camera.position.y += (Math.random() - 0.5) * shakeAmt * 0.65;
       this.cameraShake *= Math.exp(-14 * dt);
     } else {
       this.cameraShake = 0;
@@ -2343,13 +2511,14 @@ export class ArenaEngine {
     this.camera.lookAt(_camDesiredLook);
 
     this.targetFov = THREE.MathUtils.damp(this.targetFov, 48, 5.5, dt);
-    if (Math.abs(this.camera.fov - this.targetFov) > 0.03) {
+    if (Math.abs(this.camera.fov - this.targetFov) > 0.08) {
       this.camera.fov = THREE.MathUtils.damp(this.camera.fov, this.targetFov, 10, dt);
       this.camera.updateProjectionMatrix();
     }
   }
 
   private emitHud() {
+    this.hudEmitAccum = 0;
     let totalHp = 0;
     let totalMaxHp = 0;
     let activeTelegraph: string | null = null;
@@ -2436,6 +2605,8 @@ export class ArenaEngine {
     this.arena?.dispose();
     this.armorTex.dispose();
     this.shadowTex.dispose();
+    this.envMap?.dispose();
+    this.scene.environment = null;
     this.renderer.dispose();
     if (this.renderer.domElement.parentElement === this.container) {
       this.container.removeChild(this.renderer.domElement);

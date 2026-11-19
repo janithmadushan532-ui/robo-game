@@ -385,7 +385,11 @@ export default function App() {
 
       const engine = engineRef.current;
       if (engine) {
-        engine.configureMatchLoadout(sum.slotPowers, sum.monsterPowersEarned);
+        engine.configureMatchLoadout(
+          sum.slotPowers,
+          sum.monsterPowersEarned,
+          collectedPowersRef.current,
+        );
         engine.setMode('boss_intro');
       }
       setScreen('boss_intro');
@@ -487,6 +491,7 @@ export default function App() {
           hud={hud}
           levelDef={levelDef}
           matchSlotPowers={mcqSummary.slotPowers}
+          collectedPowers={progress.collectedPowers}
           bossBonusPowers={mcqSummary.monsterPowersEarned}
           soundEnabled={progress.settings.soundEnabled}
           showTouchMode={progress.settings.showTouchControls}
