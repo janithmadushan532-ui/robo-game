@@ -340,6 +340,11 @@ class SoundEngine {
         this.playNoise(0.14, 2400, 'highpass', 0.18);
         this.playTone(260, 75, 0.2, 'sawtooth', 0.28, 0.08);
         break;
+      case 'hero_surge':
+        this.playTone(360, 960, 0.16, 'triangle', 0.22);
+        this.playTone(220, 75, 0.22, 'sawtooth', 0.22, 0.04);
+        this.playNoise(0.16, 1400, 'bandpass', 0.18, 0.02);
+        break;
       case 'ultimate':
         this.playTone(220, 880, 0.25, 'sawtooth', 0.24);
         this.playTone(160, 36, 0.65, 'sawtooth', 0.36, 0.18);

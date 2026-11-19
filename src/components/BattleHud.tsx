@@ -1,7 +1,8 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Clock,
   Gauge,
+  Lock,
   Pause,
   Shield,
   Sparkles,
@@ -22,7 +23,6 @@ interface BattleHudProps {
   hud: BattleHudSnapshot;
   levelDef: BossLevelDef;
   matchSlotPowers: (PowerId | null)[];
-  collectedPowers: PowerId[];
   bossBonusPowers: MonsterPowerId[];
   soundEnabled: boolean;
   showTouchMode: 'auto' | 'always' | 'off';
@@ -34,16 +34,12 @@ interface BattleHudProps {
   onUsePower: (powerId: PowerId) => void;
 }
 
-interface UsablePowerEntry {
-  powerId: PowerId;
-  slotIndex: number | null;
-}
+const FREE_POWER_ID: PowerId = 'hero_surge';
 
 export const BattleHud: React.FC<BattleHudProps> = ({
   hud,
   levelDef,
   matchSlotPowers,
-  collectedPowers,
   bossBonusPowers,
   soundEnabled,
   showTouchMode,
@@ -67,9 +63,24 @@ export const BattleHud: React.FC<BattleHudProps> = ({
     setIsTouchDevice(Boolean(coarse));
   }, []);
 
-  // Ensure joystick state never remains stuck if HUD unmounts mid-drag
+  // Multi-touch safety: release joystick cleanly if pointer ends anywhere on window or HUD unmounts
   useEffect(() => {
+    const handleWindowPointerEnd = (e: PointerEvent) => {
+      if (joyActivePointer.current !== null && joyActivePointer.current === e.pointerId) {
+        joyActivePointer.current = null;
+        if (joyKnobRef.current) {
+          joyKnobRef.current.style.transform = 'translate3d(0px, 0px, 0)';
+        }
+        onJoystickMoveRef.current(0, 0);
+      }
+    };
+
+    window.addEventListener('pointerup', handleWindowPointerEnd);
+    window.addEventListener('pointercancel', handleWindowPointerEnd);
+
     return () => {
+      window.removeEventListener('pointerup', handleWindowPointerEnd);
+      window.removeEventListener('pointercancel', handleWindowPointerEnd);
       joyActivePointer.current = null;
       onJoystickMoveRef.current(0, 0);
     };
@@ -84,7 +95,6 @@ export const BattleHud: React.FC<BattleHudProps> = ({
     0,
     Math.min(100, (hud.playerEnergy / hud.playerMaxEnergy) * 100),
   );
-  const ultReady = hud.playerUltimateCharge >= 100;
 
   const setKnobVisual = (dx: number, dy: number) => {
     if (joyKnobRef.current) {
@@ -108,7 +118,6 @@ export const BattleHud: React.FC<BattleHudProps> = ({
     }
     setKnobVisual(dx, dy);
 
-    // Apply responsive sensitivity curve with tiny deadzone so outer ring always reaches 1.0
     const normX = dx / maxR;
     const normY = dy / maxR;
     const mag = Math.hypot(normX, normY);
@@ -134,62 +143,40 @@ export const BattleHud: React.FC<BattleHudProps> = ({
     onJoystickMoveRef.current(0, 0);
   };
 
-  const slots: (PowerId | null)[] = [
+  // Strictly 4 MCQ Slots + 1 Always-Available Free Power = 5 Powers total in bottom bar
+  const mcqSlots: (PowerId | null)[] = [
     matchSlotPowers[0] ?? null,
     matchSlotPowers[1] ?? null,
     matchSlotPowers[2] ?? null,
     matchSlotPowers[3] ?? null,
   ];
-
-  // Unified ordered list of all usable hero powers:
-  // 1) Pre-battle MCQ slots 1-4 first
-  // 2) All other unlocked/collected powers so no earned power is hidden
-  const allUsablePowers = useMemo<UsablePowerEntry[]>(() => {
-    const seen = new Set<PowerId>();
-    const list: UsablePowerEntry[] = [];
-
-    for (let i = 0; i < 4; i++) {
-      const pid = matchSlotPowers[i];
-      if (pid && pid !== 'ultimate' && !seen.has(pid)) {
-        seen.add(pid);
-        list.push({ powerId: pid, slotIndex: i + 1 });
-      }
-    }
-    for (const pid of collectedPowers) {
-      if (pid && pid !== 'ultimate' && !seen.has(pid)) {
-        seen.add(pid);
-        list.push({ powerId: pid, slotIndex: null });
-      }
-    }
-    return list;
-  }, [matchSlotPowers, collectedPowers]);
-
-  const extraCollectedPowers = useMemo(
-    () => allUsablePowers.filter((p) => p.slotIndex === null),
-    [allUsablePowers],
-  );
+  const freeDef = PLAYER_POWERS[FREE_POWER_ID];
+  const freeCd = hud.powerCooldowns[FREE_POWER_ID] ?? 0;
+  const freeCdPct = Math.max(0, Math.min(100, (freeCd / freeDef.cooldown) * 100));
+  const freeHasEnergy = hud.playerEnergy >= freeDef.energyCost;
+  const freeReady = freeCd <= 0 && freeHasEnergy;
 
   return (
-    <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-1.5 sm:p-3.5">
+    <div className="pointer-events-none absolute inset-0 flex flex-col justify-between p-1.5 sm:p-3">
       {/* TOP FIGHTING HEALTH BARS (Compact on mobile landscape so 3D arena stays wide open) */}
-      <div className="flex flex-col gap-1 sm:gap-2">
-        <div className="grid grid-cols-[1fr_auto_1fr] items-start gap-1.5 sm:gap-4">
+      <div className="flex flex-col gap-1 sm:gap-1.5">
+        <div className="grid grid-cols-[1fr_auto_1fr] items-start gap-1.5 sm:gap-3.5">
           {/* Player Health & Energy Cluster */}
-          <div className="rounded-lg border border-sky-500/40 bg-slate-950/90 px-2 py-1.5 shadow-lg sm:px-3 sm:py-2">
-            <div className="mb-0.5 flex items-center justify-between text-[10px] font-bold sm:mb-1 sm:text-xs">
+          <div className="rounded-lg border border-sky-500/40 bg-slate-950/90 px-2 py-1 shadow-lg sm:px-3 sm:py-1.5">
+            <div className="mb-0.5 flex items-center justify-between text-[10px] font-bold sm:text-xs">
               <span className="font-display tracking-wider text-sky-300">SCIENCE PALADIN</span>
               <span className="font-display tabular-nums text-white">
                 {hud.playerHp} / {hud.playerMaxHp}
               </span>
             </div>
-            <div className="h-2.5 w-full overflow-hidden rounded-sm bg-slate-800 sm:h-3">
+            <div className="h-2 w-full overflow-hidden rounded-sm bg-slate-800 sm:h-2.5">
               <div
                 className="h-full bg-gradient-to-r from-sky-500 to-emerald-400 transition-[width] duration-100"
                 style={{ width: `${playerHpPct}%` }}
               />
             </div>
 
-            <div className="mt-1 flex items-center gap-1.5 sm:mt-1.5 sm:gap-2">
+            <div className="mt-1 flex items-center gap-1.5 sm:gap-2">
               <div className="h-1.5 flex-1 overflow-hidden rounded-sm bg-slate-800">
                 <div
                   className="h-full bg-amber-400 transition-[width] duration-75"
@@ -238,7 +225,7 @@ export const BattleHud: React.FC<BattleHudProps> = ({
           </div>
 
           {/* Center Round Timer + Pause/Mute */}
-          <div className="pointer-events-auto flex flex-col items-center gap-0.5 rounded-lg border border-slate-700 bg-slate-950/92 px-2 py-1 sm:gap-1 sm:px-3 sm:py-1.5">
+          <div className="pointer-events-auto flex flex-col items-center gap-0.5 rounded-lg border border-slate-700 bg-slate-950/92 px-2 py-1 sm:px-3 sm:py-1.5">
             <div className="text-[9px] font-bold tracking-widest text-amber-400 sm:text-[10px]">
               LV.{levelDef.level} · S{levelDef.sector}
               {levelDef.isBossLevel ? ' · BOSS' : ''}
@@ -248,11 +235,12 @@ export const BattleHud: React.FC<BattleHudProps> = ({
                 WAVE {hud.survivalWave} / {hud.survivalTotalWaves}
               </div>
             )}
-            <div className="font-display text-xs font-black tabular-nums text-white sm:text-base">
+            <div className="font-display text-xs font-black tabular-nums text-white sm:text-sm">
               {Math.floor(hud.battleTime)}s
             </div>
             <div className="flex items-center gap-1">
               <button
+                type="button"
                 onClick={onToggleSound}
                 aria-label="Toggle Sound"
                 className="rounded bg-slate-800 p-1 text-slate-300 hover:bg-slate-700"
@@ -264,6 +252,7 @@ export const BattleHud: React.FC<BattleHudProps> = ({
                 )}
               </button>
               <button
+                type="button"
                 onClick={onPause}
                 aria-label="Pause Game"
                 className="rounded bg-slate-800 p-1 text-slate-200 hover:bg-slate-700"
@@ -274,7 +263,7 @@ export const BattleHud: React.FC<BattleHudProps> = ({
           </div>
 
           {/* Boss / Enemy Squad Health & Earned Monster Powers */}
-          <div className="rounded-lg border border-rose-500/45 bg-slate-950/90 px-2 py-1.5 shadow-lg sm:px-3 sm:py-2">
+          <div className="rounded-lg border border-rose-500/45 bg-slate-950/90 px-2 py-1 shadow-lg sm:px-3 sm:py-1.5">
             {hud.enemies.length > 1 ? (
               <div className="flex flex-col gap-1">
                 <div className="flex items-center justify-between text-[9px] font-extrabold text-rose-300 sm:text-[10px]">
@@ -341,7 +330,7 @@ export const BattleHud: React.FC<BattleHudProps> = ({
               </div>
             ) : (
               <>
-                <div className="mb-0.5 flex items-center justify-between gap-1.5 text-[10px] font-bold sm:mb-1 sm:text-xs">
+                <div className="mb-0.5 flex items-center justify-between gap-1.5 text-[10px] font-bold sm:text-xs">
                   <span className="font-display tabular-nums text-white">
                     {hud.bossHp} / {hud.bossMaxHp}
                   </span>
@@ -356,7 +345,7 @@ export const BattleHud: React.FC<BattleHudProps> = ({
                     </span>
                   </div>
                 </div>
-                <div className="h-2.5 w-full overflow-hidden rounded-sm bg-slate-800 sm:h-3">
+                <div className="h-2 w-full overflow-hidden rounded-sm bg-slate-800 sm:h-2.5">
                   <div
                     className="ml-auto h-full bg-gradient-to-l from-rose-600 to-orange-500 transition-[width] duration-100"
                     style={{ width: `${bossHpPct}%` }}
@@ -457,17 +446,19 @@ export const BattleHud: React.FC<BattleHudProps> = ({
       {/* BOTTOM ACTION DOCK */}
       <div className="flex flex-col gap-1.5">
         {renderTouchControls ? (
-          /* MOBILE LANDSCAPE ERGONOMIC CONTROLS:
-             Left: Enlarged high-response Virtual Joystick
-             Center (Elevated): All Collected & Drafted Powers + Ultimate
-             Right: ONE Large ATTACK Button + ONLY JUMP & DODGE */
+          /* MOBILE LANDSCAPE ERGONOMIC LAYOUT:
+             Left: Responsive Large Virtual Joystick
+             Bottom-Center: Strictly 5 Power Slots (4 Pre-Battle MCQ Slots + 1 Always-Available FREE Surge)
+             Right (Higher Ergonomic Thumb Zone): Elevated DODGE + Elevated Large ATTACK */
           <div className="flex items-end justify-between gap-2 pb-1">
-            {/* Left: Larger High-Sensitivity Virtual Joystick */}
-            <div className="flex shrink-0 flex-col items-center pl-1 pb-0.5">
+            {/* Left: Responsive Virtual Joystick */}
+            <div className="flex shrink-0 flex-col items-center pb-1 pl-1 sm:pl-2">
               <div
                 ref={joyBaseRef}
+                data-testid="mobile-joystick"
                 onPointerDown={(e) => {
                   e.preventDefault();
+                  e.stopPropagation();
                   try {
                     e.currentTarget.setPointerCapture(e.pointerId);
                   } catch {
@@ -485,147 +476,171 @@ export const BattleHud: React.FC<BattleHudProps> = ({
                 onPointerUp={(e) => resetJoystick(e.pointerId)}
                 onPointerCancel={(e) => resetJoystick(e.pointerId)}
                 onLostPointerCapture={(e) => resetJoystick(e.pointerId)}
-                className="pointer-events-auto relative h-32 w-32 touch-none select-none rounded-full border-2 border-sky-400/65 bg-slate-950/75 shadow-[0_0_24px_rgba(56,189,248,0.2)] sm:h-36 sm:w-36"
+                className="pointer-events-auto relative h-28 w-28 touch-none select-none rounded-full border-2 border-sky-400/70 bg-slate-950/80 shadow-[0_0_24px_rgba(56,189,248,0.22)] sm:h-32 sm:w-32"
               >
-                {/* Inner Directional Guide Crosshairs */}
-                <div className="pointer-events-none absolute inset-4 rounded-full border border-sky-400/25" />
-                <div className="pointer-events-none absolute top-2 left-1/2 h-2 w-0.5 -translate-x-1/2 bg-sky-400/45" />
-                <div className="pointer-events-none absolute bottom-2 left-1/2 h-2 w-0.5 -translate-x-1/2 bg-sky-400/45" />
-                <div className="pointer-events-none absolute left-2 top-1/2 h-0.5 w-2 -translate-y-1/2 bg-sky-400/45" />
-                <div className="pointer-events-none absolute right-2 top-1/2 h-0.5 w-2 -translate-y-1/2 bg-sky-400/45" />
+                {/* Directional Crosshairs */}
+                <div className="pointer-events-none absolute inset-3.5 rounded-full border border-sky-400/25" />
+                <div className="pointer-events-none absolute top-2 left-1/2 h-2 w-0.5 -translate-x-1/2 bg-sky-400/50" />
+                <div className="pointer-events-none absolute bottom-2 left-1/2 h-2 w-0.5 -translate-x-1/2 bg-sky-400/50" />
+                <div className="pointer-events-none absolute top-1/2 left-2 h-0.5 w-2 -translate-y-1/2 bg-sky-400/50" />
+                <div className="pointer-events-none absolute top-1/2 right-2 h-0.5 w-2 -translate-y-1/2 bg-sky-400/50" />
 
-                {/* Hardware-accelerated Thumb Knob (zero React state re-renders) */}
+                {/* Hardware-accelerated Thumb Knob */}
                 <div
                   ref={joyKnobRef}
-                  className="pointer-events-none absolute top-1/2 left-1/2 -ml-[26px] -mt-[26px] flex h-[52px] w-[52px] items-center justify-center rounded-full border-2 border-sky-200 bg-sky-500/90 shadow-lg"
+                  className="pointer-events-none absolute top-1/2 left-1/2 -ml-[24px] -mt-[24px] flex h-[48px] w-[48px] items-center justify-center rounded-full border-2 border-sky-200 bg-sky-500/90 shadow-lg"
                 >
-                  <div className="h-4 w-4 rounded-full bg-white/40" />
+                  <div className="h-3.5 w-3.5 rounded-full bg-white/45" />
                 </div>
               </div>
             </div>
 
-            {/* Center: Elevated Power Panel (All Collected Powers + Pre-Battle Slots + Ultimate) */}
-            <div className="pointer-events-auto mb-5 flex min-w-0 flex-1 justify-center sm:mb-7">
-              <div className="max-h-[116px] w-full max-w-[440px] touch-pan-y overflow-y-auto rounded-xl border border-slate-700/85 bg-slate-950/90 p-1.5 shadow-xl">
-                <div className="flex flex-wrap items-center justify-center gap-1.5">
-                  {allUsablePowers.map(({ powerId, slotIndex }) => {
-                    const def = PLAYER_POWERS[powerId];
-                    const cd = hud.powerCooldowns[powerId] ?? 0;
-                    const cdPct = Math.max(0, Math.min(100, (cd / def.cooldown) * 100));
-                    const hasEnergy = hud.playerEnergy >= def.energyCost;
-                    const ready = cd <= 0 && hasEnergy;
-
+            {/* Bottom-Center: Strictly 5 Power Slots (4 MCQ-Earned Slots + 1 Always-Available FREE Power) */}
+            <div className="pointer-events-auto mb-1 flex min-w-0 flex-1 justify-center px-1 sm:mb-2">
+              <div
+                data-testid="mobile-power-panel"
+                className="grid w-full max-w-[440px] grid-cols-5 gap-1.5 rounded-xl border border-slate-700/90 bg-slate-950/92 p-1.5 shadow-2xl sm:max-w-[500px] sm:gap-2 sm:p-2"
+              >
+                {/* Slots 1-4: Pre-Battle MCQ Earned Powers Only */}
+                {mcqSlots.map((pid, idx) => {
+                  if (!pid) {
                     return (
-                      <button
-                        key={powerId}
-                        type="button"
-                        disabled={!ready}
-                        onPointerDown={(e) => {
-                          if (!ready) return;
-                          e.preventDefault();
-                          onUsePower(powerId);
-                        }}
-                        className={`relative flex min-h-[44px] min-w-[74px] touch-none select-none flex-col items-center justify-center overflow-hidden rounded-lg border px-2 py-1 text-[10px] font-extrabold transition-transform ${
-                          ready
-                            ? 'bg-slate-900 text-white active:scale-95'
-                            : 'border-slate-800 bg-slate-950 text-slate-500'
-                        }`}
-                        style={ready ? { borderColor: def.color } : undefined}
-                      >
-                        {cd > 0 && (
-                          <div
-                            className="pointer-events-none absolute inset-x-0 bottom-0 bg-slate-700/70"
-                            style={{ height: `${cdPct}%` }}
-                          />
-                        )}
-                        <div
-                          className="relative flex items-center gap-1"
-                          style={{ color: ready ? def.color : undefined }}
-                        >
-                          {slotIndex !== null && (
-                            <span className="rounded bg-slate-800 px-1 text-[8px] font-black text-slate-200">
-                              {slotIndex}
-                            </span>
-                          )}
-                          <PowerIcon type={def.icon} className="h-3.5 w-3.5 shrink-0" />
-                          <span className="max-w-[54px] truncate font-display text-[9px] font-black">
-                            {def.shortTag}
-                          </span>
-                        </div>
-                        <span className="relative text-[8px] font-bold tabular-nums">
-                          {cd > 0 ? `${cd.toFixed(1)}s` : `${def.energyCost} EN`}
-                        </span>
-                      </button>
-                    );
-                  })}
-
-                  {/* Ultimate Power Integrated Cleanly Into Elevated Power Panel */}
-                  <button
-                    type="button"
-                    disabled={!ultReady}
-                    onPointerDown={(e) => {
-                      if (!ultReady) return;
-                      e.preventDefault();
-                      onUsePower('ultimate');
-                    }}
-                    className={`relative flex min-h-[44px] min-w-[78px] touch-none select-none flex-col items-center justify-center overflow-hidden rounded-lg border px-2 py-1 text-[10px] font-black transition-transform ${
-                      ultReady
-                        ? 'border-rose-300 bg-rose-600 text-white shadow-[0_0_12px_rgba(244,63,94,0.55)] active:scale-95'
-                        : 'border-slate-800 bg-slate-950 text-slate-400'
-                    }`}
-                  >
-                    {!ultReady && (
                       <div
-                        className="pointer-events-none absolute inset-y-0 left-0 bg-rose-900/45"
-                        style={{ width: `${hud.playerUltimateCharge}%` }}
-                      />
-                    )}
-                    <div className="relative flex items-center gap-1 font-display text-[9px]">
-                      <Sparkles className="h-3.5 w-3.5" />
-                      <span>ULTIMATE</span>
-                    </div>
-                    <span className="relative text-[8px] font-bold tabular-nums">
-                      {ultReady ? 'READY!' : `${hud.playerUltimateCharge}%`}
-                    </span>
-                  </button>
-                </div>
+                        key={`mcq_empty_${idx}`}
+                        data-testid={`power-slot-${idx + 1}`}
+                        className="flex min-h-[54px] select-none flex-col items-center justify-center gap-0.5 rounded-lg border border-slate-800/90 bg-slate-950/90 px-1 py-1 text-slate-600 sm:min-h-[60px]"
+                      >
+                        <div className="flex items-center gap-1">
+                          <span className="rounded bg-slate-900 px-1 text-[8px] font-black text-slate-500">
+                            {idx + 1}
+                          </span>
+                          <Lock className="h-3.5 w-3.5" />
+                        </div>
+                        <span className="font-display text-[8px] font-bold tracking-tight sm:text-[9px]">
+                          Q{idx + 1} MISS
+                        </span>
+                      </div>
+                    );
+                  }
+
+                  const def = PLAYER_POWERS[pid];
+                  const cd = hud.powerCooldowns[pid] ?? 0;
+                  const cdPct = Math.max(0, Math.min(100, (cd / def.cooldown) * 100));
+                  const hasEnergy = hud.playerEnergy >= def.energyCost;
+                  const ready = cd <= 0 && hasEnergy;
+
+                  return (
+                    <button
+                      key={`${pid}_${idx}`}
+                      type="button"
+                      data-testid={`power-slot-${idx + 1}`}
+                      disabled={!ready}
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (!ready) return;
+                        onUsePower(pid);
+                      }}
+                      className={`relative flex min-h-[54px] touch-none select-none flex-col items-center justify-center gap-0.5 overflow-hidden rounded-lg border px-1 py-1 transition-transform sm:min-h-[60px] ${
+                        ready
+                          ? 'bg-slate-900 text-white shadow-md active:scale-95'
+                          : 'border-slate-800 bg-slate-950 text-slate-500'
+                      }`}
+                      style={ready ? { borderColor: def.color } : undefined}
+                    >
+                      {cd > 0 && (
+                        <div
+                          className="pointer-events-none absolute inset-x-0 bottom-0 bg-slate-700/75"
+                          style={{ height: `${cdPct}%` }}
+                        />
+                      )}
+                      <span className="relative rounded bg-slate-800/90 px-1 text-[8px] font-black text-slate-200">
+                        {idx + 1}
+                      </span>
+                      <div
+                        className="relative flex items-center justify-center gap-1"
+                        style={{ color: ready ? def.color : undefined }}
+                      >
+                        <PowerIcon type={def.icon} className="h-4 w-4 shrink-0 sm:h-4.5 sm:w-4.5" />
+                      </div>
+                      <span className="relative w-full truncate text-center font-display text-[8px] font-black tracking-tight sm:text-[9px]">
+                        {def.shortTag}
+                      </span>
+                      <span className="relative text-[8px] font-bold tabular-nums opacity-90">
+                        {cd > 0 ? `${cd.toFixed(1)}s` : `${def.energyCost}EN`}
+                      </span>
+                    </button>
+                  );
+                })}
+
+                {/* Slot 5: Dedicated Always-Available FREE Power */}
+                <button
+                  type="button"
+                  data-testid="power-slot-free"
+                  disabled={!freeReady}
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (!freeReady) return;
+                    onUsePower(FREE_POWER_ID);
+                  }}
+                  className={`relative flex min-h-[54px] touch-none select-none flex-col items-center justify-center gap-0.5 overflow-hidden rounded-lg border-2 px-1 py-1 transition-transform sm:min-h-[60px] ${
+                    freeReady
+                      ? 'border-amber-400 bg-gradient-to-b from-amber-950/90 to-slate-900 text-white shadow-[0_0_12px_rgba(251,191,36,0.3)] active:scale-95'
+                      : 'border-amber-900/50 bg-slate-950 text-slate-500'
+                  }`}
+                >
+                  {freeCd > 0 && (
+                    <div
+                      className="pointer-events-none absolute inset-x-0 bottom-0 bg-amber-900/55"
+                      style={{ height: `${freeCdPct}%` }}
+                    />
+                  )}
+                  <span className="relative rounded bg-amber-400 px-1.5 py-px font-display text-[7px] font-black tracking-wider text-slate-950 sm:text-[8px]">
+                    FREE
+                  </span>
+                  <div
+                    className="relative flex items-center justify-center"
+                    style={{ color: freeReady ? freeDef.color : undefined }}
+                  >
+                    <PowerIcon type={freeDef.icon} className="h-4 w-4 shrink-0 sm:h-4.5 sm:w-4.5" />
+                  </div>
+                  <span className="relative w-full truncate text-center font-display text-[8px] font-black tracking-tight sm:text-[9px]">
+                    {freeDef.shortTag}
+                  </span>
+                  <span className="relative text-[8px] font-bold tabular-nums opacity-90">
+                    {freeCd > 0 ? `${freeCd.toFixed(1)}s` : `${freeDef.energyCost}EN`}
+                  </span>
+                </button>
               </div>
             </div>
 
-            {/* Right: Simplified 3-Button Thumb Cluster (JUMP + DODGE + ONE Large ATTACK) */}
-            <div className="pointer-events-auto flex shrink-0 items-end gap-2 pr-1 pb-0.5">
-              {/* Two Additional Combat Buttons: JUMP & DODGE */}
-              <div className="flex flex-col gap-2">
-                <button
-                  type="button"
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    onAction('jump');
-                  }}
-                  className="flex h-14 w-14 touch-none select-none flex-col items-center justify-center rounded-full border-2 border-slate-400/80 bg-slate-900/92 font-display text-[10px] font-black tracking-wide text-slate-100 shadow-lg active:scale-90 sm:h-15 sm:w-15"
-                >
-                  <span>JUMP</span>
-                </button>
-                <button
-                  type="button"
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    onAction('dodge');
-                  }}
-                  className="flex h-14 w-14 touch-none select-none flex-col items-center justify-center rounded-full border-2 border-cyan-400/85 bg-cyan-950/92 font-display text-[10px] font-black tracking-wide text-cyan-200 shadow-lg active:scale-90 sm:h-15 sm:w-15"
-                >
-                  <span>DODGE</span>
-                </button>
-              </div>
-
-              {/* Primary Large ATTACK Combo Button */}
+            {/* Right: Elevated Ergonomic DODGE + Large ATTACK (Clear Separation, Never Near Bottom Edge) */}
+            <div className="pointer-events-auto mr-1.5 mb-6 flex shrink-0 items-end gap-3.5 sm:mr-3 sm:mb-8 sm:gap-4">
+              {/* Elevated DODGE Button */}
               <button
                 type="button"
+                data-testid="mobile-dodge-btn"
                 onPointerDown={(e) => {
                   e.preventDefault();
+                  e.stopPropagation();
+                  onAction('dodge');
+                }}
+                className="mb-8 flex h-14 w-14 touch-none select-none flex-col items-center justify-center rounded-full border-2 border-cyan-300/90 bg-cyan-950/95 font-display text-[10px] font-black tracking-wider text-cyan-200 shadow-[0_0_18px_rgba(34,211,238,0.28)] active:scale-90 sm:mb-10 sm:h-16 sm:w-16 sm:text-[11px]"
+              >
+                <span>DODGE</span>
+              </button>
+
+              {/* Elevated Large ATTACK Button */}
+              <button
+                type="button"
+                data-testid="mobile-attack-btn"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                   onAction('attack');
                 }}
-                className="flex h-[88px] w-[88px] touch-none select-none flex-col items-center justify-center gap-1 rounded-full border-[3px] border-amber-300 bg-gradient-to-br from-rose-600 via-orange-600 to-amber-500 font-display text-xs font-black tracking-wider text-white shadow-[0_0_24px_rgba(245,158,11,0.45)] active:scale-90 sm:h-24 sm:w-24 sm:text-sm"
+                className="flex h-[82px] w-[82px] touch-none select-none flex-col items-center justify-center gap-1 rounded-full border-[3px] border-amber-300 bg-gradient-to-br from-rose-600 via-orange-600 to-amber-500 font-display text-xs font-black tracking-wider text-white shadow-[0_0_24px_rgba(245,158,11,0.5)] active:scale-90 sm:h-[92px] sm:w-[92px] sm:text-sm"
               >
                 <Swords className="h-7 w-7 sm:h-8 sm:w-8" />
                 <span>ATTACK</span>
@@ -633,11 +648,11 @@ export const BattleHud: React.FC<BattleHudProps> = ({
             </div>
           </div>
         ) : (
-          /* PC DESKTOP BOTTOM BAR: 4 Pre-Battle Power Slot Buttons + Collected Powers + Melee Controls */
+          /* PC DESKTOP BOTTOM BAR: Strictly 5 Power Slots (4 MCQ + 1 FREE) + Melee Controls */
           <div className="mx-auto flex w-full max-w-5xl flex-col items-center gap-1.5">
-            {/* 4 Dedicated Pre-Battle Power Slot Buttons */}
+            {/* 5 Power Slots: 4 Pre-Battle MCQ Slots + 1 Always-Available Free Surge */}
             <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2 rounded-xl border border-slate-700/85 bg-slate-950/94 px-3 py-2 shadow-2xl">
-              {slots.map((pid, idx) => {
+              {mcqSlots.map((pid, idx) => {
                 if (!pid) {
                   return (
                     <div
@@ -649,7 +664,7 @@ export const BattleHud: React.FC<BattleHudProps> = ({
                       </span>
                       <div className="text-left">
                         <div className="font-display text-[10px] font-black">SLOT {idx + 1}</div>
-                        <div className="text-[9px] font-semibold">NO POWER</div>
+                        <div className="text-[9px] font-semibold">Q{idx + 1} MISSED</div>
                       </div>
                     </div>
                   );
@@ -664,6 +679,7 @@ export const BattleHud: React.FC<BattleHudProps> = ({
                 return (
                   <button
                     key={`${pid}_${idx}`}
+                    type="button"
                     disabled={!ready}
                     onClick={() => onUsePower(pid)}
                     title={`${def.name} (${def.effectNote}, ${def.energyCost} EN)`}
@@ -684,7 +700,7 @@ export const BattleHud: React.FC<BattleHudProps> = ({
                       {idx + 1}
                     </span>
                     <div
-                      className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-950"
+                      className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
                       style={{
                         backgroundColor: ready ? def.color : '#1e293b',
                         color: ready ? '#020617' : '#64748b',
@@ -708,88 +724,90 @@ export const BattleHud: React.FC<BattleHudProps> = ({
                 );
               })}
 
-              {/* Ultimate Button */}
+              {/* 5th Slot: Dedicated FREE Hero Surge */}
               <button
-                disabled={!ultReady}
-                onClick={() => onUsePower('ultimate')}
-                className={`flex items-center gap-1.5 rounded-lg border px-3 py-2 font-display text-[11px] font-black transition ${
-                  ultReady
-                    ? 'border-rose-300 bg-rose-600 text-white hover:bg-rose-500 active:scale-95'
-                    : 'border-slate-800 bg-slate-950 text-slate-500'
+                type="button"
+                disabled={!freeReady}
+                onClick={() => onUsePower(FREE_POWER_ID)}
+                title={`${freeDef.name} (${freeDef.effectNote}, ${freeDef.energyCost} EN)`}
+                className={`relative flex min-w-[136px] items-center gap-2 overflow-hidden rounded-lg border-2 px-2.5 py-1.5 text-left transition ${
+                  freeReady
+                    ? 'border-amber-400 bg-gradient-to-r from-amber-950/90 to-slate-900 text-white hover:brightness-110 active:scale-95'
+                    : 'border-amber-900/50 bg-slate-950 text-slate-500'
                 }`}
               >
-                <Sparkles className="h-3.5 w-3.5" />
-                <span>[U] ULT {hud.playerUltimateCharge}%</span>
+                {freeCd > 0 && (
+                  <div
+                    className="pointer-events-none absolute inset-y-0 left-0 bg-amber-900/55 transition-[width] duration-75"
+                    style={{ width: `${freeCdPct}%` }}
+                  />
+                )}
+                <span className="relative rounded bg-amber-400 px-1.5 py-0.5 font-display text-[9px] font-black text-slate-950">
+                  FREE
+                </span>
+                <div
+                  className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
+                  style={{
+                    backgroundColor: freeReady ? freeDef.color : '#1e293b',
+                    color: freeReady ? '#020617' : '#64748b',
+                  }}
+                >
+                  <PowerIcon type={freeDef.icon} className="h-4 w-4" />
+                </div>
+                <div className="relative min-w-0 flex-1">
+                  <div className="truncate font-display text-[11px] font-black">
+                    [5/Q] {freeDef.shortTag}
+                  </div>
+                  <div className="text-[9px] font-bold tabular-nums">
+                    {freeCd > 0
+                      ? `CD ${freeCd.toFixed(1)}s`
+                      : !freeHasEnergy
+                      ? `NEED ${freeDef.energyCost} EN`
+                      : `${freeDef.energyCost} EN · READY`}
+                  </div>
+                </div>
               </button>
             </div>
-
-            {/* Extra Collected Powers Bar on PC */}
-            {extraCollectedPowers.length > 0 && (
-              <div className="pointer-events-auto flex max-w-4xl flex-wrap items-center justify-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/90 px-2.5 py-1.5">
-                <span className="mr-1 font-display text-[9px] font-bold tracking-wider text-slate-400">
-                  COLLECTED:
-                </span>
-                {extraCollectedPowers.map(({ powerId }) => {
-                  const def = PLAYER_POWERS[powerId];
-                  const cd = hud.powerCooldowns[powerId] ?? 0;
-                  const ready = cd <= 0 && hud.playerEnergy >= def.energyCost;
-                  return (
-                    <button
-                      key={powerId}
-                      disabled={!ready}
-                      onClick={() => onUsePower(powerId)}
-                      title={`${def.name} (${def.effectNote}, ${def.energyCost} EN)`}
-                      className={`flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] font-bold transition ${
-                        ready
-                          ? 'bg-slate-900 text-white hover:bg-slate-800 active:scale-95'
-                          : 'border-slate-800 bg-slate-950 text-slate-500'
-                      }`}
-                      style={ready ? { borderColor: def.color } : undefined}
-                    >
-                      <PowerIcon type={def.icon} className="h-3 w-3" />
-                      <span>{def.shortTag}</span>
-                      <span className="text-[9px] tabular-nums opacity-80">
-                        {cd > 0 ? `${cd.toFixed(1)}s` : `${def.energyCost}`}
-                      </span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
 
             {/* Melee & Defensive Action Bar */}
             <div className="pointer-events-auto flex flex-wrap items-center justify-center gap-1.5 rounded-xl border border-slate-800 bg-slate-950/90 px-3 py-1.5">
               <button
+                type="button"
                 onClick={() => onAction('normal')}
                 className="rounded-lg border border-sky-500/60 bg-sky-950/80 px-2.5 py-1 text-[11px] font-bold text-sky-200 hover:bg-sky-900"
               >
                 [J] PUNCH
               </button>
               <button
+                type="button"
                 onClick={() => onAction('kick')}
                 className="rounded-lg border border-emerald-500/60 bg-emerald-950/80 px-2.5 py-1 text-[11px] font-bold text-emerald-200 hover:bg-emerald-900"
               >
                 [F] KICK
               </button>
               <button
+                type="button"
                 onClick={() => onAction('heavy')}
                 className="rounded-lg border border-amber-500/60 bg-amber-950/80 px-2.5 py-1 text-[11px] font-bold text-amber-200 hover:bg-amber-900"
               >
                 [K] HEAVY
               </button>
               <button
+                type="button"
                 onClick={() => onAction('jump')}
                 className="rounded-lg border border-slate-600 bg-slate-900 px-2.5 py-1 text-[11px] font-bold text-slate-200 hover:bg-slate-800"
               >
                 [Space] JUMP
               </button>
               <button
+                type="button"
                 onClick={() => onAction('dodge')}
                 className="rounded-lg border border-cyan-500/60 bg-cyan-950/80 px-2.5 py-1 text-[11px] font-bold text-cyan-200 hover:bg-cyan-900"
               >
                 [Shift] DODGE
               </button>
               <button
+                type="button"
                 onPointerDown={() => onBlockHold(true)}
                 onPointerUp={() => onBlockHold(false)}
                 onPointerLeave={() => onBlockHold(false)}
@@ -797,10 +815,20 @@ export const BattleHud: React.FC<BattleHudProps> = ({
               >
                 [I] BLOCK
               </button>
+              {hud.playerUltimateCharge >= 100 && (
+                <button
+                  type="button"
+                  onClick={() => onUsePower('ultimate')}
+                  className="flex items-center gap-1 rounded-lg border border-rose-300 bg-rose-600 px-2.5 py-1 text-[11px] font-black text-white hover:bg-rose-500"
+                >
+                  <Sparkles className="h-3 w-3" />
+                  <span>[U] ULT READY</span>
+                </button>
+              )}
             </div>
 
             <div className="rounded bg-slate-950/85 px-3 py-1 text-[11px] font-semibold text-slate-300">
-              WASD/Arrows Move · Space Jump · J/Click Punch · F Kick · K/Right-Click Heavy · Shift Dodge · Hold I Block · 1–4 Earned Powers · U Ultimate
+              WASD/Arrows Move · Space Jump · J/Click Punch · F Kick · K/Right-Click Heavy · Shift Dodge · Hold I Block · 1–4 MCQ Powers · 5/Q Free Surge · U Ultimate
             </div>
           </div>
         )}

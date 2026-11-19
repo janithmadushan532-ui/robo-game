@@ -82,6 +82,7 @@ interface FighterRuntime {
   superShieldActive: boolean;
   blocking: boolean;
   comboStep: number;
+  wasFlashing?: boolean;
 }
 
 interface EnemyEntity {
@@ -151,6 +152,7 @@ export class ArenaEngine {
   private playerRig: ArticulatedFighterRig;
   private playerShadow: THREE.Mesh;
   private enemies: EnemyEntity[] = [];
+  private livingEnemiesCache: EnemyEntity[] = [];
 
   private currentLevel: BossLevelDef = BOSS_LEVELS[0];
   private mode: EngineMode = 'menu';
@@ -209,7 +211,7 @@ export class ArenaEngine {
     this.camera.position.set(0, 5.8, 13.5);
 
     this.renderer = new THREE.WebGLRenderer({
-      antialias: !this.isSoftwareGl && initialQuality !== 'low',
+      antialias: !this.isSoftwareGl && !this.isCoarsePointer && initialQuality !== 'low',
       powerPreference: 'high-performance',
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -327,14 +329,10 @@ export class ArenaEngine {
       : 1;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, maxDpr));
 
-    const shadowsOn = this.isCoarsePointer
-      ? this.graphicsQuality === 'high'
-      : this.graphicsQuality !== 'low';
+    const shadowsOn = !this.isCoarsePointer && this.graphicsQuality !== 'low';
     this.renderer.shadowMap.enabled = shadowsOn;
     this.renderer.shadowMap.type =
-      !this.isCoarsePointer && this.graphicsQuality === 'high'
-        ? THREE.PCFSoftShadowMap
-        : THREE.PCFShadowMap;
+      this.graphicsQuality === 'high' ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
 
     if (this.vfx) {
       this.vfx.particleBudgetScale = this.getParticleBudgetScale();
@@ -349,6 +347,13 @@ export class ArenaEngine {
 
   public setMode(mode: EngineMode) {
     this.mode = mode;
+    if (mode !== 'battle') {
+      this.keysHeld.clear();
+      this.joyVec.x = 0;
+      this.joyVec.y = 0;
+      this.bufferedAttack = false;
+      this.player.blocking = false;
+    }
     if (mode === 'boss_intro') {
       this.introTimer = 0;
       soundEngine.playBossRoar();
@@ -488,8 +493,7 @@ export class ArenaEngine {
 
     const maxAniso = this.renderer.capabilities.getMaxAnisotropy();
     const shadowsEnabled =
-      !this.isSoftwareGl &&
-      (this.isCoarsePointer ? this.graphicsQuality === 'high' : this.graphicsQuality !== 'low');
+      !this.isSoftwareGl && !this.isCoarsePointer && this.graphicsQuality !== 'low';
     this.arena = buildArenaForLevel(
       this.scene,
       levelDef,
@@ -574,17 +578,11 @@ export class ArenaEngine {
   public configureMatchLoadout(
     slotPowers: (PowerId | null)[],
     monsterPowers: MonsterPowerId[],
-    collectedPowers: PowerId[] = [],
   ) {
     this.playerSlotPowers = [...slotPowers];
-    const uniqueEarned: PowerId[] = [];
+    const uniqueEarned: PowerId[] = ['hero_surge'];
     for (const p of slotPowers) {
       if (p && !uniqueEarned.includes(p)) {
-        uniqueEarned.push(p);
-      }
-    }
-    for (const p of collectedPowers) {
-      if (p && p !== 'ultimate' && !uniqueEarned.includes(p)) {
         uniqueEarned.push(p);
       }
     }
@@ -647,7 +645,12 @@ export class ArenaEngine {
   }
 
   private getLivingEnemies(): EnemyEntity[] {
-    return this.enemies.filter((e) => e.alive);
+    this.livingEnemiesCache.length = 0;
+    for (let i = 0; i < this.enemies.length; i++) {
+      const e = this.enemies[i];
+      if (e.alive) this.livingEnemiesCache.push(e);
+    }
+    return this.livingEnemiesCache;
   }
 
   public setJoystick(x: number, y: number) {
@@ -828,7 +831,13 @@ export class ArenaEngine {
 
   public triggerPlayerPower(powerId: PowerId) {
     if (this.mode !== 'battle') return;
-    if (powerId !== 'ultimate' && !this.playerPowers.includes(powerId)) return;
+    if (
+      powerId !== 'ultimate' &&
+      powerId !== 'hero_surge' &&
+      !this.playerPowers.includes(powerId)
+    ) {
+      return;
+    }
     if (this.powerCooldowns[powerId] > 0) return;
     if (this.player.stunTimer > 0 || this.player.state === 'hitstun' || this.player.state === 'defeat') return;
 
@@ -1303,6 +1312,27 @@ export class ArenaEngine {
         break;
       }
 
+      case 'hero_surge': {
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 3.6, 0.36);
+        this.vfx.spawnProjectile({
+          origin: _origin,
+          direction: _dir,
+          speed: 22.0,
+          owner: 'player',
+          damage: scaledDmg,
+          color: def.hexColor,
+          radius: 0.78,
+          effect: 'knockback',
+        });
+        this.vfx.spawnBurst(_origin, def.hexColor, 12, 5.5, 0.9, 3);
+        for (const e of this.getLivingEnemies()) {
+          if (this.player.pos.distanceTo(e.runtime.pos) < 3.4) {
+            this.applyDamageToEnemy(e, Math.round(scaledDmg * 0.75), false, false, 'SURGE');
+          }
+        }
+        break;
+      }
+
       case 'ultimate': {
         this.player.iFrames = 0.85;
         this.vfx.spawnShockRing(this.player.pos, 0xf43f5e, 8.0, 0.65);
@@ -1387,6 +1417,8 @@ export class ArenaEngine {
       if (this.playerSlotPowers[2]) this.triggerPlayerPower(this.playerSlotPowers[2]);
     } else if (e.code === 'Digit4') {
       if (this.playerSlotPowers[3]) this.triggerPlayerPower(this.playerSlotPowers[3]);
+    } else if (e.code === 'Digit5' || e.code === 'KeyQ') {
+      this.triggerPlayerPower('hero_surge');
     } else if (e.code === 'KeyU') this.triggerPlayerPower('ultimate');
   };
 
@@ -1543,11 +1575,13 @@ export class ArenaEngine {
 
     if (runtime.flashTimer > 0) {
       runtime.flashTimer -= dt;
+      runtime.wasFlashing = true;
       for (const m of rig.flashMaterials) {
         m.emissive.setHex(0xffffff);
         m.emissiveIntensity = 0.85;
       }
-    } else {
+    } else if (runtime.wasFlashing) {
+      runtime.wasFlashing = false;
       for (const m of rig.flashMaterials) {
         m.emissive.setHex(0x000000);
         m.emissiveIntensity = 0;
@@ -1711,10 +1745,10 @@ export class ArenaEngine {
         }
       }
 
-      // Allow partial locomotion steering during attacks so movement never feels locked up
+      // Allow continuous locomotion steering during attacks so joystick movement never feels interrupted
       this.getMoveInputWorldDir(_moveWorld);
       if (_moveWorld.lengthSq() > 0.02) {
-        const atkSpeed = speed * 0.45;
+        const atkSpeed = speed * 0.55;
         p.vel.x = THREE.MathUtils.lerp(p.vel.x, _moveWorld.x * atkSpeed, 1 - Math.exp(-10 * dt));
         p.vel.z = THREE.MathUtils.lerp(p.vel.z, _moveWorld.z * atkSpeed, 1 - Math.exp(-10 * dt));
       }
@@ -1724,21 +1758,40 @@ export class ArenaEngine {
         if (this.bufferedAttack) {
           this.bufferedAttack = false;
           this.triggerPlayerAction('attack');
+          return;
         }
+      } else {
+        return;
       }
-      return;
     }
 
-    if (p.state === 'dodge' || p.state === 'cast_power' || p.state === 'ultimate' || p.state === 'hitstun') {
+    if (p.state === 'cast_power') {
+      // Allow smooth joystick steering while casting powers so movement never freezes
+      this.getMoveInputWorldDir(_moveWorld);
+      if (_moveWorld.lengthSq() > 0.02) {
+        const castSpeed = speed * 0.65;
+        p.vel.x = THREE.MathUtils.lerp(p.vel.x, _moveWorld.x * castSpeed, 1 - Math.exp(-12 * dt));
+        p.vel.z = THREE.MathUtils.lerp(p.vel.z, _moveWorld.z * castSpeed, 1 - Math.exp(-12 * dt));
+      }
+      if (p.stateTimer >= p.stateDuration) {
+        p.state = 'idle';
+      } else {
+        return;
+      }
+    }
+
+    if (p.state === 'dodge' || p.state === 'ultimate' || p.state === 'hitstun') {
       if (p.stateTimer >= p.stateDuration) {
         const wasDodge = p.state === 'dodge';
         p.state = 'idle';
         if (wasDodge && this.bufferedAttack) {
           this.bufferedAttack = false;
           this.triggerPlayerAction('attack');
+          return;
         }
+      } else {
+        return;
       }
-      return;
     }
 
     this.getMoveInputWorldDir(_moveWorld);

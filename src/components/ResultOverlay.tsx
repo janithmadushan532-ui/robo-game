@@ -63,8 +63,8 @@ export const ResultOverlay: React.FC<ResultOverlayProps> = ({
 
   if (screen === 'paused') {
     return (
-      <div className="absolute inset-0 flex items-center justify-center bg-slate-950/75 p-4">
-        <div className="w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-950 p-6 text-center shadow-2xl">
+      <div className="game-scroll absolute inset-0 flex items-center justify-center overflow-y-auto bg-slate-950/75 p-3">
+        <div className="my-auto w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-950 p-5 text-center shadow-2xl sm:p-6">
           <h2 className="font-display text-2xl font-black tracking-wider text-white">PAUSED</h2>
           <p className="font-sinhala mt-1 text-xs text-slate-400">
             Level {levelDef.level} — {levelDef.bossName} ({levelDef.robotClass})
@@ -103,8 +103,8 @@ export const ResultOverlay: React.FC<ResultOverlayProps> = ({
       : null;
 
     return (
-      <div className="absolute inset-0 flex items-center justify-center bg-slate-950/75 p-4">
-        <div className="w-full max-w-lg rounded-2xl border border-emerald-500/60 bg-slate-950/96 p-5 sm:p-6 shadow-2xl">
+      <div className="game-scroll absolute inset-0 flex items-center justify-center overflow-y-auto bg-slate-950/75 p-3">
+        <div className="my-auto w-full max-w-lg rounded-2xl border border-emerald-500/60 bg-slate-950/96 p-4 shadow-2xl sm:p-6">
           <div className="flex items-center gap-3">
             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400">
               {isFinalCampaignLevel ? <Crown className="h-7 w-7 text-amber-400" /> : <Trophy className="h-7 w-7" />}
@@ -211,8 +211,8 @@ export const ResultOverlay: React.FC<ResultOverlayProps> = ({
 
   if (screen === 'defeat') {
     return (
-      <div className="absolute inset-0 flex items-center justify-center bg-slate-950/75 p-4">
-        <div className="w-full max-w-md rounded-2xl border border-rose-500/60 bg-slate-950/96 p-6 text-center shadow-2xl">
+      <div className="game-scroll absolute inset-0 flex items-center justify-center overflow-y-auto bg-slate-950/75 p-3">
+        <div className="my-auto w-full max-w-md rounded-2xl border border-rose-500/60 bg-slate-950/96 p-5 text-center shadow-2xl sm:p-6">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-rose-500/20 text-rose-400">
             <ShieldAlert className="h-8 w-8" />
           </div>

@@ -86,9 +86,9 @@ export const McqDraftOverlay: React.FC<McqDraftOverlayProps> = ({
   };
 
   return (
-    <div className="absolute inset-0 flex flex-col justify-between gap-2 p-2.5 sm:p-5">
+    <div className="game-scroll absolute inset-0 flex flex-col justify-between gap-2 overflow-y-auto p-2 sm:p-4">
       {/* Top Status Strip */}
-      <div className="mx-auto flex w-full max-w-4xl flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-700/80 bg-slate-950/94 px-4 py-2.5 shadow-xl">
+      <div className="mx-auto flex w-full max-w-4xl flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-700/80 bg-slate-950/94 px-3 py-2 shadow-xl sm:px-4">
         <div>
           <div className="text-[11px] font-bold tracking-wider text-sky-400 uppercase">
             PRE-BATTLE POWER DRAFT · LEVEL {levelDef.level} · {levelDef.bossName} ({levelDef.monsterCategory})
@@ -184,7 +184,7 @@ export const McqDraftOverlay: React.FC<McqDraftOverlayProps> = ({
       </div>
 
       {/* Center Sinhala MCQ Card */}
-      <div className="game-scroll mx-auto my-auto max-h-[68vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-sky-500/40 bg-slate-950/94 p-4 sm:p-5 shadow-2xl">
+      <div className="game-scroll mx-auto my-auto w-full max-w-3xl shrink-0 rounded-2xl border border-sky-500/40 bg-slate-950/94 p-3.5 shadow-2xl sm:p-5">
         <div className="mb-2.5 flex items-center justify-between text-xs font-bold text-slate-400">
           <span className="font-sinhala text-sky-300">
             සෑම නිවැරදි පිළිතුරකටම වෙනස් බලයක් හිමිවේ · වැරදි පිළිතුරකට බලය හිමි නොවේ!

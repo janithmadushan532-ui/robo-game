@@ -421,6 +421,21 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     description: 'Instantly teleports behind the nearest monster with brief invulnerability and delivers a guaranteed Crit slash.',
     effectNote: 'Blink Behind + Guaranteed Crit',
   },
+  hero_surge: {
+    id: 'hero_surge',
+    name: 'Hero Surge',
+    sinhalaName: 'නිදහස් ශක්ති ප්‍රහාරය',
+    damage: 26,
+    cooldown: 3.8,
+    energyCost: 12,
+    color: '#fbbf24',
+    hexColor: 0xfbbf24,
+    hotkey: '5',
+    shortTag: 'SURGE',
+    icon: 'swords',
+    description: 'Always-ready signature hero burst: fires a golden plasma wave and shock ring without needing an MCQ.',
+    effectNote: '26 DMG + Wave & Ring (FREE)',
+  },
   ultimate: {
     id: 'ultimate',
     name: 'Ultimate Power',
@@ -471,6 +486,7 @@ export function createEmptyPowerCooldowns(): Record<PowerId, number> {
     rage_mode: 0,
     time_slow: 0,
     teleport_attack: 0,
+    hero_surge: 0,
   };
 }
 

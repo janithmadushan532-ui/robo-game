@@ -29,7 +29,8 @@ export type PowerId =
   | 'super_shield'
   | 'rage_mode'
   | 'time_slow'
-  | 'teleport_attack';
+  | 'teleport_attack'
+  | 'hero_surge';
 
 export type MonsterPowerId =
   | 'm_fire'

@@ -4,6 +4,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { RotateCw } from 'lucide-react';
 import { BattleHud } from './components/BattleHud';
 import { CollectionModals } from './components/CollectionModals';
 import { MainMenu } from './components/MainMenu';
@@ -65,8 +66,33 @@ const INITIAL_HUD: BattleHudSnapshot = {
   battleTime: 0,
 };
 
-// All 28 active combat powers eligible for Pre-Battle MCQ Slots 1-4 (Ultimate stays bound to [U] Fury)
-const DRAFTABLE_PLAYER_POWERS = PLAYER_POWER_LIST.filter((p) => p.id !== 'ultimate');
+// Active combat powers eligible for Pre-Battle MCQ Slots 1-4 (Ultimate and Free Surge stay outside MCQ rewards)
+const DRAFTABLE_PLAYER_POWERS = PLAYER_POWER_LIST.filter(
+  (p) => p.id !== 'ultimate' && p.id !== 'hero_surge',
+);
+
+const detectTouchMobile = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  return (
+    Boolean(window.matchMedia?.('(pointer: coarse)').matches) ||
+    ('ontouchstart' in window && Math.min(window.innerWidth, window.innerHeight) < 900)
+  );
+};
+
+const tryLockLandscape = () => {
+  try {
+    const orientation = screen?.orientation as
+      | (ScreenOrientation & { lock?: (mode: string) => Promise<void> })
+      | undefined;
+    if (orientation && typeof orientation.lock === 'function') {
+      orientation.lock('landscape').catch(() => {
+        // Fallback portrait rotation overlay handles devices/browsers that disallow silent orientation lock
+      });
+    }
+  } catch {
+    // Ignore unsupported orientation lock APIs
+  }
+};
 
 const ENEMY_COMBAT_POWERS: MonsterPowerId[] = [
   'm_fire',
@@ -128,6 +154,10 @@ export default function App() {
   const [lastAwardedMonsterPower, setLastAwardedMonsterPower] = useState<MonsterPowerId | null>(null);
 
   const [hud, setHud] = useState<BattleHudSnapshot>(INITIAL_HUD);
+  const [isTouchMobile, setIsTouchMobile] = useState<boolean>(() => detectTouchMobile());
+  const [isPortrait, setIsPortrait] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerHeight > window.innerWidth : false,
+  );
 
   // Refs so Three.js & async callbacks always read fresh state immediately
   const currentLevelRef = useRef(currentLevelNum);
@@ -138,6 +168,7 @@ export default function App() {
   collectedPowersRef.current = progress.collectedPowers;
   const screenRef = useRef(screen);
   screenRef.current = screen;
+  const pausedByRotationRef = useRef(false);
 
   // Sync audio settings
   useEffect(() => {
@@ -149,6 +180,48 @@ export default function App() {
     saveProgress(progress);
     setCanContinue(hasSavedProgress());
   }, [progress]);
+
+  // Enforce/track mobile landscape orientation across resize and orientationchange events
+  useEffect(() => {
+    let timeoutId: number | undefined;
+    const syncViewport = () => {
+      setIsTouchMobile(detectTouchMobile());
+      setIsPortrait(window.innerHeight > window.innerWidth);
+    };
+    const handleOrientationChange = () => {
+      syncViewport();
+      window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout(syncViewport, 80);
+    };
+
+    syncViewport();
+    tryLockLandscape();
+    window.addEventListener('resize', syncViewport);
+    window.addEventListener('orientationchange', handleOrientationChange);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      window.removeEventListener('resize', syncViewport);
+      window.removeEventListener('orientationchange', handleOrientationChange);
+    };
+  }, []);
+
+  // Auto-pause battle if mobile phone turns portrait, and resume cleanly when rotated back to landscape
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    if (isTouchMobile && isPortrait) {
+      if (screenRef.current === 'battle') {
+        pausedByRotationRef.current = true;
+        engine.setMode('paused');
+      }
+    } else if (pausedByRotationRef.current) {
+      pausedByRotationRef.current = false;
+      if (screenRef.current === 'battle') {
+        engine.setMode('battle');
+      }
+    }
+  }, [isTouchMobile, isPortrait]);
 
   // Initialize Three.js ArenaEngine ONCE in isolated mount ref
   useEffect(() => {
@@ -223,6 +296,7 @@ export default function App() {
   const startLevelFlow = useCallback(
     (levelNum: number) => {
       const clampedLevel = Math.max(1, Math.min(BOSS_LEVELS.length, levelNum));
+      tryLockLandscape();
       soundEngine.unlockAndStartMusic();
       soundEngine.playUiClick();
 
@@ -385,11 +459,7 @@ export default function App() {
 
       const engine = engineRef.current;
       if (engine) {
-        engine.configureMatchLoadout(
-          sum.slotPowers,
-          sum.monsterPowersEarned,
-          collectedPowersRef.current,
-        );
+        engine.configureMatchLoadout(sum.slotPowers, sum.monsterPowersEarned);
         engine.setMode('boss_intro');
       }
       setScreen('boss_intro');
@@ -446,7 +516,7 @@ export default function App() {
   const levelDef = getLevelDef(currentLevelNum);
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-[#07090f]">
+    <div className="relative h-dvh w-dvw select-none overflow-hidden bg-[#07090f]">
       {/* Isolated WebGL Mount Container */}
       <div ref={canvasMountRef} className="absolute inset-0 h-full w-full" />
 
@@ -459,6 +529,7 @@ export default function App() {
           onPlayNew={() => startLevelFlow(1)}
           onContinue={() => startLevelFlow(progress.highestUnlockedLevel)}
           onOpenModal={(m) => {
+            tryLockLandscape();
             soundEngine.unlockAndStartMusic();
             soundEngine.playUiClick();
             setActiveModal(m);
@@ -491,7 +562,6 @@ export default function App() {
           hud={hud}
           levelDef={levelDef}
           matchSlotPowers={mcqSummary.slotPowers}
-          collectedPowers={progress.collectedPowers}
           bossBonusPowers={mcqSummary.monsterPowersEarned}
           soundEnabled={progress.settings.soundEnabled}
           showTouchMode={progress.settings.showTouchControls}
@@ -545,6 +615,36 @@ export default function App() {
           engineRef.current?.loadLevelScene(1, 'menu');
         }}
       />
+      {/* Mobile Portrait Orientation Gate */}
+      {isTouchMobile && isPortrait && (
+        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-slate-950/95 px-6 text-center">
+          <div className="flex max-w-sm flex-col items-center rounded-2xl border border-sky-400/40 bg-slate-900 p-6 shadow-2xl">
+            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-sky-400/50 bg-sky-500/15 text-sky-300">
+              <RotateCw className="h-9 w-9" />
+            </div>
+            <h2 className="font-display text-lg font-black tracking-wider text-white">
+              LANDSCAPE MODE REQUIRED
+            </h2>
+            <p className="mt-2 text-sm font-medium leading-relaxed text-slate-300">
+              Please rotate your phone to landscape mode to play.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                try {
+                  document.documentElement.requestFullscreen?.().catch(() => {});
+                } catch {
+                  // Ignore fullscreen rejection
+                }
+                tryLockLandscape();
+              }}
+              className="mt-5 rounded-xl border border-sky-300/60 bg-sky-500 px-5 py-2.5 font-display text-xs font-black tracking-wider text-slate-950 shadow-lg active:scale-95"
+            >
+              LOCK LANDSCAPE MODE
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

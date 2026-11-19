@@ -367,7 +367,8 @@ export const CollectionModals: React.FC<CollectionModalsProps> = ({
           {activeModal === 'powers' && (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {PLAYER_POWER_LIST.map((pwr) => {
-                const owned = progress.collectedPowers.includes(pwr.id);
+                const isFree = pwr.id === 'hero_surge';
+                const owned = isFree || progress.collectedPowers.includes(pwr.id);
                 return (
                   <div
                     key={pwr.id}
@@ -390,8 +391,14 @@ export const CollectionModals: React.FC<CollectionModalsProps> = ({
                             <span className="font-display text-sm font-black text-white">
                               {pwr.name}
                             </span>
-                            <span className="rounded bg-slate-800 px-1.5 py-0.5 font-display text-[10px] font-bold text-slate-300">
-                              {pwr.id === 'ultimate' ? '[U]' : 'MCQ'}
+                            <span
+                              className={`rounded px-1.5 py-0.5 font-display text-[10px] font-bold ${
+                                isFree
+                                  ? 'bg-amber-400 text-slate-950'
+                                  : 'bg-slate-800 text-slate-300'
+                              }`}
+                            >
+                              {pwr.id === 'ultimate' ? '[U]' : isFree ? 'FREE' : 'MCQ'}
                             </span>
                           </div>
                           <div className="font-sinhala text-xs font-semibold text-sky-300">
@@ -406,7 +413,7 @@ export const CollectionModals: React.FC<CollectionModalsProps> = ({
                             : 'bg-slate-800 text-slate-400'
                         }`}
                       >
-                        {owned ? 'UNLOCKED' : 'LOCKED'}
+                        {isFree ? 'ALWAYS READY' : owned ? 'UNLOCKED' : 'LOCKED'}
                       </span>
                     </div>
 
