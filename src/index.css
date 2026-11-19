@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+@layer base {
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background-color: #07090f;
+    font-family: 'Rajdhani', 'Noto Sans Sinhala', system-ui, -apple-system, sans-serif;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+}
+
+.font-display {
+  font-family: 'Orbitron', 'Noto Sans Sinhala', sans-serif;
+}
+
+.font-sinhala {
+  font-family: 'Noto Sans Sinhala', 'Rajdhani', sans-serif;
+}
+
+/* Custom slim scrollbar for modal drawers */
+.game-scroll::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.game-scroll::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.7);
+}
+.game-scroll::-webkit-scrollbar-thumb {
+  background: rgba(56, 189, 248, 0.45);
+  border-radius: 3px;
+}
+.game-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(56, 189, 248, 0.75);
+}

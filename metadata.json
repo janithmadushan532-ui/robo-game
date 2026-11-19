@@ -1,0 +1,6 @@
+{
+  "name": "Science Arena: Titan Clash",
+  "description": "3D Science Power Boss Fighting Game based on the Sri Lankan Grade 10 Science syllabus with Sinhala MCQs, elemental powers, and 10 unique 3D boss arenas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
