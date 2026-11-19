@@ -217,6 +217,12 @@ class SoundEngine {
     }
   }
 
+  public playPowerUpgrade() {
+    this.playTone(440, 660, 0.12, 'triangle', 0.18, 0);
+    this.playTone(660, 880, 0.14, 'triangle', 0.18, 0.08);
+    this.playTone(880, 1320, 0.24, 'sine', 0.22, 0.16);
+  }
+
   public playPlayerPower(power: PowerId) {
     switch (power) {
       case 'fire':

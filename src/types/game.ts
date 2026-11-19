@@ -291,6 +291,7 @@ export type ActiveModal =
   | 'none'
   | 'levels'
   | 'powers'
+  | 'shop'
   | 'monsters'
   | 'units'
   | 'settings';
@@ -306,6 +307,8 @@ export interface SavedProgress {
   highestUnlockedLevel: number;
   defeatedBossIds: string[];
   collectedPowers: PowerId[];
+  powerUpgrades: Partial<Record<PowerId, number>>;
+  coins: number;
   selectedUnitId: number;
   usedQuestionIds: string[];
   totalWins: number;

@@ -582,3 +582,125 @@ export function getMonsterPowerDef(id: MonsterPowerId): MonsterPowerDef {
     description: p.description,
   };
 }
+
+export const MAX_POWER_LEVEL = 5;
+
+export interface UpgradedPowerStats {
+  level: number;
+  damage: number;
+  rangeMult: number;
+  vfxScale: number;
+  durationBonus: number;
+  shieldReduction: number; // 0..0.95 fraction cut (for shield/super_shield)
+  healBase: number; // base HP restored (for healing_power / super_shield)
+  critBonus: number; // +0..0.32 crit chance bonus
+  extraCount: number; // extra projectiles/meteors unlocked at higher levels
+}
+
+const DAMAGE_MULTS = [1, 1.24, 1.5, 1.8, 2.15];
+const RANGE_MULTS = [1, 1.14, 1.28, 1.44, 1.62];
+const VFX_SCALES = [1, 1.14, 1.28, 1.42, 1.58];
+const UPGRADE_BASE_COSTS = [110, 210, 340, 520]; // Lv1->2, 2->3, 3->4, 4->5
+
+export function getPowerLevel(
+  upgrades: Partial<Record<PowerId, number>> | undefined,
+  powerId: PowerId,
+): number {
+  const raw = upgrades?.[powerId] ?? 1;
+  return Math.max(1, Math.min(MAX_POWER_LEVEL, Math.floor(raw)));
+}
+
+export function getPowerUpgradeCost(powerId: PowerId, currentLevel: number): number {
+  if (currentLevel >= MAX_POWER_LEVEL) return 0;
+  const idx = Math.max(0, Math.min(UPGRADE_BASE_COSTS.length - 1, currentLevel - 1));
+  const def = PLAYER_POWERS[powerId];
+  const tierFactor =
+    powerId === 'hero_surge'
+      ? 0.85
+      : def.damage >= 48 || powerId === 'ultimate'
+      ? 1.25
+      : def.damage >= 36
+      ? 1.1
+      : 1.0;
+  return Math.round((UPGRADE_BASE_COSTS[idx] * tierFactor) / 10) * 10;
+}
+
+export function getUpgradedPowerStats(powerId: PowerId, level: number): UpgradedPowerStats {
+  const lv = Math.max(1, Math.min(MAX_POWER_LEVEL, Math.floor(level)));
+  const idx = lv - 1;
+  const def = PLAYER_POWERS[powerId];
+
+  const damage = def.damage > 0 ? Math.round(def.damage * DAMAGE_MULTS[idx]) : 0;
+  const rangeMult = RANGE_MULTS[idx];
+  const vfxScale = VFX_SCALES[idx];
+  const durationBonus = idx * 1.1; // +1.1s per upgrade level for buffs/stuns/slows
+  const baseShieldCut = powerId === 'super_shield' ? 0.8 : 0.65;
+  const shieldReduction = Math.min(0.92, baseShieldCut + idx * 0.04);
+  const baseHeal = powerId === 'healing_power' ? 42 : powerId === 'super_shield' ? 22 : 0;
+  const healBase = baseHeal > 0 ? Math.round(baseHeal * (1 + idx * 0.28)) : 0;
+  const critBonus = idx * 0.07;
+  const extraCount = lv >= 5 ? 2 : lv >= 3 ? 1 : 0;
+
+  return {
+    level: lv,
+    damage,
+    rangeMult,
+    vfxScale,
+    durationBonus,
+    shieldReduction,
+    healBase,
+    critBonus,
+    extraCount,
+  };
+}
+
+export function getPowerUpgradeHighlights(powerId: PowerId, currentLevel: number): string[] {
+  const cur = getUpgradedPowerStats(powerId, currentLevel);
+  const next = getUpgradedPowerStats(powerId, Math.min(MAX_POWER_LEVEL, currentLevel + 1));
+  const lines: string[] = [];
+
+  if (cur.damage > 0) {
+    lines.push(`Damage ${cur.damage} → ${next.damage}`);
+  }
+  if (powerId === 'shield' || powerId === 'super_shield') {
+    lines.push(
+      `Shield ${Math.round(cur.shieldReduction * 100)}% → ${Math.round(next.shieldReduction * 100)}%`,
+    );
+    const baseDur = powerId === 'super_shield' ? 8.0 : 6.0;
+    lines.push(
+      `Duration ${(baseDur + cur.durationBonus).toFixed(1)}s → ${(baseDur + next.durationBonus).toFixed(1)}s`,
+    );
+  }
+  if (powerId === 'healing_power' || powerId === 'super_shield') {
+    lines.push(`Repair +${cur.healBase} HP → +${next.healBase} HP`);
+  }
+  if (powerId === 'speed_boost' || powerId === 'rage_mode' || powerId === 'time_slow') {
+    const baseDur = powerId === 'rage_mode' ? 7.5 : 6.0;
+    lines.push(
+      `Active Time ${(baseDur + cur.durationBonus).toFixed(1)}s → ${(baseDur + next.durationBonus).toFixed(1)}s`,
+    );
+  }
+  lines.push(
+    `Range ${Math.round(cur.rangeMult * 100)}% → ${Math.round(next.rangeMult * 100)}%`,
+  );
+  lines.push(
+    `Explosion VFX ${Math.round(cur.vfxScale * 100)}% → ${Math.round(next.vfxScale * 100)}%`,
+  );
+  if (next.extraCount > cur.extraCount) {
+    if (
+      powerId === 'fire' ||
+      powerId === 'ice' ||
+      powerId === 'wind' ||
+      powerId === 'hero_surge' ||
+      powerId === 'rocket_attack' ||
+      powerId === 'energy_blast' ||
+      powerId === 'dragon_fire'
+    ) {
+      lines.push(`Bonus: +1 Extra Projectile Wave!`);
+    } else if (powerId === 'meteor_strike' || powerId === 'meteor_rain') {
+      lines.push(`Bonus: +1 Extra Sky Meteor!`);
+    }
+  }
+  return lines;
+}
+

@@ -6,6 +6,8 @@ export const DEFAULT_PROGRESS: SavedProgress = {
   highestUnlockedLevel: 1,
   defeatedBossIds: [],
   collectedPowers: ['super_punch'], // Starter kinetic skill; more unlocked via MCQs & boss wins
+  powerUpgrades: {},
+  coins: 150, // Starter battle coins for testing & upgrading in the Power Shop
   selectedUnitId: 1,
   usedQuestionIds: [],
   totalWins: 0,
@@ -25,12 +27,26 @@ export function loadProgress(): SavedProgress {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return structuredClone(DEFAULT_PROGRESS);
     const parsed = JSON.parse(raw) as Partial<SavedProgress>;
+    const migratedCoins =
+      typeof parsed.coins === 'number' && Number.isFinite(parsed.coins)
+        ? Math.max(0, Math.floor(parsed.coins))
+        : Math.max(
+            DEFAULT_PROGRESS.coins,
+            (parsed.totalWins ?? 0) * 120 + (parsed.totalCorrectMcq ?? 0) * 20,
+          );
+
     return {
       ...DEFAULT_PROGRESS,
       ...parsed,
-      collectedPowers: Array.isArray(parsed.collectedPowers) && parsed.collectedPowers.length > 0
-        ? (parsed.collectedPowers as PowerId[])
-        : [...DEFAULT_PROGRESS.collectedPowers],
+      collectedPowers:
+        Array.isArray(parsed.collectedPowers) && parsed.collectedPowers.length > 0
+          ? (parsed.collectedPowers as PowerId[])
+          : [...DEFAULT_PROGRESS.collectedPowers],
+      powerUpgrades:
+        parsed.powerUpgrades && typeof parsed.powerUpgrades === 'object'
+          ? (parsed.powerUpgrades as Partial<Record<PowerId, number>>)
+          : {},
+      coins: migratedCoins,
       defeatedBossIds: Array.isArray(parsed.defeatedBossIds) ? parsed.defeatedBossIds : [],
       usedQuestionIds: Array.isArray(parsed.usedQuestionIds) ? parsed.usedQuestionIds : [],
       settings: {
@@ -60,7 +76,8 @@ export function hasSavedProgress(): boolean {
       (parsed.highestUnlockedLevel ?? 1) > 1 ||
       (parsed.defeatedBossIds?.length ?? 0) > 0 ||
       (parsed.totalCorrectMcq ?? 0) > 0 ||
-      (parsed.totalScore ?? 0) > 0
+      (parsed.totalScore ?? 0) > 0 ||
+      Object.keys(parsed.powerUpgrades ?? {}).length > 0
     );
   } catch {
     return false;

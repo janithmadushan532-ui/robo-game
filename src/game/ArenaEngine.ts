@@ -1,7 +1,13 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { BOSS_LEVELS, getLevelDef } from '../data/levels';
-import { createEmptyPowerCooldowns, getMonsterPowerDef, PLAYER_POWERS } from '../data/powers';
+import {
+  createEmptyPowerCooldowns,
+  getMonsterPowerDef,
+  getPowerLevel,
+  getUpgradedPowerStats,
+  PLAYER_POWERS,
+} from '../data/powers';
 import {
   BattleHudSnapshot,
   BossLevelDef,
@@ -77,6 +83,7 @@ interface FighterRuntime {
   stunTimer: number;
   slowTimer: number;
   shieldTimer: number;
+  shieldDamageMult: number;
   speedBoostTimer: number;
   rageTimer: number;
   superShieldActive: boolean;
@@ -179,6 +186,7 @@ export class ArenaEngine {
   // Combat state
   private playerSlotPowers: (PowerId | null)[] = [null, null, null, null];
   private playerPowers: PowerId[] = [];
+  private powerUpgrades: Partial<Record<PowerId, number>> = {};
   private monsterExtraPowers: MonsterPowerId[] = [];
   private powerCooldowns: Record<PowerId, number> = createEmptyPowerCooldowns();
   private ultimateCharge = 0;
@@ -293,6 +301,7 @@ export class ArenaEngine {
       stunTimer: 0,
       slowTimer: 0,
       shieldTimer: 0,
+      shieldDamageMult: 0.35,
       speedBoostTimer: 0,
       rageTimer: 0,
       superShieldActive: false,
@@ -343,6 +352,10 @@ export class ArenaEngine {
     this.graphicsQuality = q;
     this.applyQualityToRenderer();
     this.loadLevelScene(this.currentLevel.level, this.mode);
+  }
+
+  public setPowerUpgrades(upgrades: Partial<Record<PowerId, number>>) {
+    this.powerUpgrades = { ...upgrades };
   }
 
   public setMode(mode: EngineMode) {
@@ -676,14 +689,24 @@ export class ArenaEngine {
     const targetEnemy = this.getNearestLivingEnemy();
 
     if (action === 'jump') {
-      if (this.player.pos.y <= 0.08) {
-        this.player.vel.y = 8.6;
+      if (this.player.pos.y <= 0.1) {
+        this.player.vel.y = 8.9;
+        // Preserve horizontal movement momentum smoothly when jumping while moving
+        this.getMoveInputWorldDir(_moveWorld);
+        if (_moveWorld.lengthSq() > 0.02) {
+          const boostMult =
+            (this.player.speedBoostTimer > 0 ? 1.48 : 1.0) * (this.player.rageTimer > 0 ? 1.25 : 1.0);
+          const airSpd = 7.8 * boostMult;
+          this.player.vel.x = _moveWorld.x * airSpd;
+          this.player.vel.z = _moveWorld.z * airSpd;
+          this.player.rotY = Math.atan2(_moveWorld.x, _moveWorld.z);
+        }
         this.player.state = 'jump';
         this.player.stateTimer = 0;
         this.player.blocking = false;
         this.bufferedAttack = false;
         soundEngine.playJump();
-        this.vfx.spawnShockRing(this.player.pos, 0x94a3b8, 1.6, 0.25);
+        this.vfx.spawnShockRing(this.player.pos, 0x94a3b8, 1.65, 0.25);
       }
       return;
     }
@@ -838,89 +861,112 @@ export class ArenaEngine {
     ) {
       return;
     }
-    if (this.powerCooldowns[powerId] > 0) return;
-    if (this.player.stunTimer > 0 || this.player.state === 'hitstun' || this.player.state === 'defeat') return;
+    if (this.player.hp <= 0 || this.player.state === 'defeat') return;
 
     const targetEnemy = this.getNearestLivingEnemy();
     if (!targetEnemy) return;
 
     const def = PLAYER_POWERS[powerId];
+    const powerLv = getPowerLevel(this.powerUpgrades, powerId);
+    const stats = getUpgradedPowerStats(powerId, powerLv);
+
     if (powerId === 'ultimate') {
       if (this.ultimateCharge < 100) return;
       this.ultimateCharge = 0;
-    } else {
-      if (this.player.energy < def.energyCost) return;
-      this.player.energy -= def.energyCost;
     }
-
-    this.powerCooldowns[powerId] = def.cooldown;
+    // Note: The 5 battle powers (4 MCQ slots + 1 FREE Hero Surge) have NO cooldowns and NO energy locks!
+    this.powerCooldowns[powerId] = 0;
     this.player.blocking = false;
     this.faceTarget(this.player, targetEnemy.runtime.pos);
     this.player.state = powerId === 'ultimate' ? 'ultimate' : 'cast_power';
     this.player.stateTimer = 0;
-    this.player.stateDuration = powerId === 'ultimate' ? 0.62 : 0.36;
+    this.player.stateDuration = powerId === 'ultimate' ? 0.62 : 0.34;
     if (powerId === 'ultimate') this.targetFov = 54;
     else this.targetFov = 50.5;
 
     soundEngine.playPlayerPower(powerId);
     _dir.copy(targetEnemy.runtime.pos).sub(this.player.pos).setY(0).normalize();
     _origin.copy(this.player.pos).addScaledVector(_dir, 0.9).setY(1.35);
-    const scaledDmg = this.scalePlayerDamage(def.damage);
+
+    const scaledDmg = this.scalePlayerDamage(stats.damage);
+    const rangeMult = stats.rangeMult;
+    const vfxScale = stats.vfxScale;
+    const durBonus = stats.durationBonus;
+    const critBonus = stats.critBonus;
+    const extraCount = stats.extraCount;
 
     switch (powerId) {
-      case 'fire':
-        this.vfx.spawnProjectile({
-          origin: _origin,
-          direction: _dir,
-          speed: 17.5,
-          owner: 'player',
-          damage: scaledDmg,
-          color: def.hexColor,
-          radius: 0.72,
-          effect: 'knockback',
-        });
-        this.vfx.spawnBurst(_origin, def.hexColor, 14, 5, 0.9, 3);
+      case 'fire': {
+        const shots = 1 + extraCount;
+        for (let i = 0; i < shots; i++) {
+          const ang = shots === 1 ? 0 : (i - (shots - 1) / 2) * 0.2;
+          const cos = Math.cos(ang);
+          const sin = Math.sin(ang);
+          _v1.set(_dir.x * cos - _dir.z * sin, 0, _dir.x * sin + _dir.z * cos);
+          this.vfx.spawnProjectile({
+            origin: _origin,
+            direction: _v1,
+            speed: 17.5 + (powerLv - 1) * 1.1,
+            owner: 'player',
+            damage: i === 0 || shots === 1 ? scaledDmg : Math.round(scaledDmg * 0.72),
+            color: def.hexColor,
+            radius: 0.72 * rangeMult,
+            effect: 'knockback',
+          });
+        }
+        this.vfx.spawnBurst(_origin, def.hexColor, Math.round(14 * vfxScale), 5 * vfxScale, 0.9 * vfxScale, 3);
         break;
+      }
 
-      case 'ice':
-        this.vfx.spawnProjectile({
-          origin: _origin,
-          direction: _dir,
-          speed: 19.5,
-          owner: 'player',
-          damage: scaledDmg,
-          color: def.hexColor,
-          radius: 0.65,
-          effect: 'slow',
-        });
-        this.vfx.spawnBurst(_origin, def.hexColor, 14, 5, 0.85, 3);
+      case 'ice': {
+        const shots = 1 + extraCount;
+        for (let i = 0; i < shots; i++) {
+          const ang = shots === 1 ? 0 : (i - (shots - 1) / 2) * 0.18;
+          const cos = Math.cos(ang);
+          const sin = Math.sin(ang);
+          _v1.set(_dir.x * cos - _dir.z * sin, 0, _dir.x * sin + _dir.z * cos);
+          this.vfx.spawnProjectile({
+            origin: _origin,
+            direction: _v1,
+            speed: 19.5 + (powerLv - 1) * 1.1,
+            owner: 'player',
+            damage: i === 0 || shots === 1 ? scaledDmg : Math.round(scaledDmg * 0.72),
+            color: def.hexColor,
+            radius: 0.65 * rangeMult,
+            effect: 'slow',
+          });
+        }
+        this.vfx.spawnBurst(_origin, def.hexColor, Math.round(14 * vfxScale), 5 * vfxScale, 0.85 * vfxScale, 3);
         break;
+      }
 
       case 'lightning':
         this.vfx.spawnProjectile({
           origin: _origin,
           direction: _dir,
-          speed: 28,
+          speed: 28 + (powerLv - 1) * 1.5,
           owner: 'player',
           damage: scaledDmg,
           color: def.hexColor,
-          radius: 0.6,
+          radius: 0.6 * rangeMult,
           effect: 'stun',
         });
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 2.5, 0.25);
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 2.5 * vfxScale, 0.25);
         break;
 
       case 'thunder': {
         const living = this.getLivingEnemies();
+        const aoeRadius = 4.5 * rangeMult;
         for (const e of living) {
-          if (e === targetEnemy || e.runtime.pos.distanceTo(targetEnemy.runtime.pos) < 4.5) {
-            this.vfx.spawnPillar(e.runtime.pos, def.hexColor, 1.5, true);
-            this.vfx.spawnShockRing(e.runtime.pos, def.hexColor, 4.6, 0.5);
+          if (e === targetEnemy || e.runtime.pos.distanceTo(targetEnemy.runtime.pos) < aoeRadius) {
+            this.vfx.spawnPillar(e.runtime.pos, def.hexColor, 1.5 * vfxScale, true);
+            this.vfx.spawnShockRing(e.runtime.pos, def.hexColor, 4.6 * vfxScale, 0.5);
             _targetVec.copy(e.runtime.pos).setY(1.4);
-            this.vfx.spawnBurst(_targetVec, def.hexColor, 16, 8.5, 1.2, 6);
+            this.vfx.spawnBurst(_targetVec, def.hexColor, Math.round(16 * vfxScale), 8.5, 1.2 * vfxScale, 6);
+            e.runtime.stunTimer = Math.max(e.runtime.stunTimer, 0.45 + durBonus * 0.35);
             this.applyDamageToEnemy(
               e,
-              e === targetEnemy ? scaledDmg : Math.round(scaledDmg * 0.75),
+              e === targetEnemy ? scaledDmg : Math.round(scaledDmg * 0.78),
               true,
               false,
               'THUNDER STRIKE',
@@ -933,49 +979,59 @@ export class ArenaEngine {
 
       case 'earth':
       case 'ground_shockwave': {
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 6.8, 0.55);
+        const aoeRadius = 6.8 * rangeMult;
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, aoeRadius, 0.55);
         const living = this.getLivingEnemies();
         let hitAny = false;
         for (const e of living) {
           const dist = e.runtime.pos.distanceTo(this.player.pos);
-          if (e === targetEnemy || dist < 6.8) {
+          if (e === targetEnemy || dist < aoeRadius) {
             hitAny = true;
-            this.vfx.spawnPillar(e.runtime.pos, def.hexColor, 1.15, false);
-            this.vfx.spawnShockRing(e.runtime.pos, def.hexColor, 4.0, 0.45);
+            this.vfx.spawnPillar(e.runtime.pos, def.hexColor, 1.15 * vfxScale, false);
+            this.vfx.spawnShockRing(e.runtime.pos, def.hexColor, 4.0 * vfxScale, 0.45);
             this.applyDamageToEnemy(e, scaledDmg, false, true, def.shortTag);
-            e.runtime.stunTimer = Math.max(e.runtime.stunTimer, 0.65);
+            e.runtime.stunTimer = Math.max(e.runtime.stunTimer, 0.65 + durBonus * 0.3);
             _v1.copy(e.runtime.pos).sub(this.player.pos).setY(0).normalize();
-            e.runtime.vel.addScaledVector(_v1, 7.5);
+            e.runtime.vel.addScaledVector(_v1, 7.5 * rangeMult);
           }
         }
         if (!hitAny) {
-          this.vfx.spawnPillar(targetEnemy.runtime.pos, def.hexColor, 1.15, false);
+          this.vfx.spawnPillar(targetEnemy.runtime.pos, def.hexColor, 1.15 * vfxScale, false);
         }
         this.cameraShake = Math.max(this.cameraShake, 0.24);
         break;
       }
 
-      case 'wind':
-        this.vfx.spawnProjectile({
-          origin: _origin,
-          direction: _dir,
-          speed: 20,
-          owner: 'player',
-          damage: scaledDmg,
-          color: def.hexColor,
-          radius: 0.9,
-          effect: 'knockback',
-        });
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 3.5, 0.35);
+      case 'wind': {
+        const shots = 1 + extraCount;
+        for (let i = 0; i < shots; i++) {
+          const ang = shots === 1 ? 0 : (i - (shots - 1) / 2) * 0.24;
+          const cos = Math.cos(ang);
+          const sin = Math.sin(ang);
+          _v1.set(_dir.x * cos - _dir.z * sin, 0, _dir.x * sin + _dir.z * cos);
+          this.vfx.spawnProjectile({
+            origin: _origin,
+            direction: _v1,
+            speed: 20 + (powerLv - 1) * 1.2,
+            owner: 'player',
+            damage: i === 0 || shots === 1 ? scaledDmg : Math.round(scaledDmg * 0.72),
+            color: def.hexColor,
+            radius: 0.9 * rangeMult,
+            effect: 'knockback',
+          });
+        }
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 3.5 * vfxScale, 0.35);
         break;
+      }
 
       case 'shield': {
-        this.player.shieldTimer = 6.0;
+        this.player.shieldTimer = 6.0 + durBonus;
+        this.player.shieldDamageMult = 1 - stats.shieldReduction;
         this.player.superShieldActive = false;
         if (this.playerRig.shieldDome) this.playerRig.shieldDome.visible = true;
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 3.6, 0.45);
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 3.6 * vfxScale, 0.45);
         for (const e of this.getLivingEnemies()) {
-          if (this.player.pos.distanceTo(e.runtime.pos) < 3.8) {
+          if (this.player.pos.distanceTo(e.runtime.pos) < 3.8 * rangeMult) {
             this.applyDamageToEnemy(e, scaledDmg, false, false, 'SHIELD PULSE');
           }
         }
@@ -983,88 +1039,116 @@ export class ArenaEngine {
       }
 
       case 'super_punch': {
-        this.player.vel.x = _dir.x * 16.5;
-        this.player.vel.z = _dir.z * 16.5;
-        this.player.iFrames = 0.25;
-        this.vfx.spawnBurst(_origin, def.hexColor, 14, 6, 1.0, 4);
+        this.player.vel.x = _dir.x * (16.5 * rangeMult);
+        this.player.vel.z = _dir.z * (16.5 * rangeMult);
+        this.player.iFrames = 0.25 + durBonus * 0.08;
+        this.vfx.spawnBurst(_origin, def.hexColor, Math.round(14 * vfxScale), 6 * vfxScale, 1.0 * vfxScale, 4);
         for (const e of this.getLivingEnemies()) {
-          if (this.player.pos.distanceTo(e.runtime.pos) < 4.7) {
-            const isCrit = Math.random() < 0.45;
+          if (this.player.pos.distanceTo(e.runtime.pos) < 4.7 * rangeMult) {
+            const isCrit = Math.random() < 0.45 + critBonus;
             this.applyDamageToEnemy(e, scaledDmg, isCrit, true, 'SUPER PUNCH');
-            e.runtime.vel.addScaledVector(_dir, 9.5);
+            e.runtime.vel.addScaledVector(_dir, 9.5 * rangeMult);
             this.cameraShake = Math.max(this.cameraShake, 0.26);
           }
         }
         break;
       }
 
-      case 'energy_blast':
-        this.vfx.spawnProjectile({
-          origin: _origin,
-          direction: _dir,
-          speed: 23,
-          owner: 'player',
-          damage: scaledDmg,
-          color: def.hexColor,
-          radius: 0.78,
-          effect: 'pierce',
-        });
-        this.vfx.spawnBurst(_origin, def.hexColor, 14, 6, 1.0, 2);
+      case 'energy_blast': {
+        const shots = 1 + extraCount;
+        for (let i = 0; i < shots; i++) {
+          const ang = shots === 1 ? 0 : (i - (shots - 1) / 2) * 0.16;
+          const cos = Math.cos(ang);
+          const sin = Math.sin(ang);
+          _v1.set(_dir.x * cos - _dir.z * sin, 0, _dir.x * sin + _dir.z * cos);
+          this.vfx.spawnProjectile({
+            origin: _origin,
+            direction: _v1,
+            speed: 23 + (powerLv - 1) * 1.3,
+            owner: 'player',
+            damage: i === 0 || shots === 1 ? scaledDmg : Math.round(scaledDmg * 0.72),
+            color: def.hexColor,
+            radius: 0.78 * rangeMult,
+            effect: 'pierce',
+          });
+        }
+        this.vfx.spawnBurst(_origin, def.hexColor, Math.round(14 * vfxScale), 6 * vfxScale, 1.0 * vfxScale, 2);
         break;
+      }
 
       case 'laser_blast':
         _targetVec.copy(targetEnemy.runtime.pos).setY(1.35);
         this.vfx.spawnLaserBeam(_origin, _targetVec, def.hexColor);
-        this.vfx.spawnBurst(_targetVec, def.hexColor, 14, 7, 1.0, 4);
-        this.applyDamageToEnemy(targetEnemy, scaledDmg, Math.random() < 0.25, true, 'LASER BLAST');
+        this.vfx.spawnBurst(_targetVec, def.hexColor, Math.round(14 * vfxScale), 7 * vfxScale, 1.0 * vfxScale, 4);
+        for (const e of this.getLivingEnemies()) {
+          if (e === targetEnemy || e.runtime.pos.distanceTo(targetEnemy.runtime.pos) < 2.4 * rangeMult) {
+            this.applyDamageToEnemy(
+              e,
+              e === targetEnemy ? scaledDmg : Math.round(scaledDmg * 0.7),
+              Math.random() < 0.25 + critBonus,
+              true,
+              'LASER BLAST',
+            );
+          }
+        }
         this.cameraShake = Math.max(this.cameraShake, 0.16);
         break;
 
-      case 'rocket_attack':
-        this.vfx.spawnProjectile({
-          origin: _origin,
-          direction: _dir,
-          speed: 14.5,
-          owner: 'player',
-          damage: scaledDmg,
-          color: def.hexColor,
-          radius: 0.7,
-          effect: 'knockback',
-          homing: true,
-        });
-        this.vfx.spawnBurst(_origin, 0xfbbf24, 12, 5, 0.9, 3);
+      case 'rocket_attack': {
+        const shots = 1 + extraCount;
+        for (let i = 0; i < shots; i++) {
+          const ang = shots === 1 ? 0 : (i - (shots - 1) / 2) * 0.26;
+          const cos = Math.cos(ang);
+          const sin = Math.sin(ang);
+          _v1.set(_dir.x * cos - _dir.z * sin, 0, _dir.x * sin + _dir.z * cos);
+          this.vfx.spawnProjectile({
+            origin: _origin,
+            direction: _v1,
+            speed: 14.5 + (powerLv - 1) * 1.1,
+            owner: 'player',
+            damage: i === 0 || shots === 1 ? scaledDmg : Math.round(scaledDmg * 0.72),
+            color: def.hexColor,
+            radius: 0.7 * rangeMult,
+            effect: 'knockback',
+            homing: true,
+          });
+        }
+        this.vfx.spawnBurst(_origin, 0xfbbf24, Math.round(12 * vfxScale), 5 * vfxScale, 0.9 * vfxScale, 3);
         break;
+      }
 
       case 'speed_boost':
-        this.player.speedBoostTimer = 6.0;
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 3.2, 0.4);
-        this.vfx.spawnBurst(_origin, def.hexColor, 14, 6, 0.9, 2);
+        this.player.speedBoostTimer = 6.0 + durBonus;
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 3.2 * vfxScale, 0.4);
+        this.vfx.spawnBurst(_origin, def.hexColor, Math.round(14 * vfxScale), 6 * vfxScale, 0.9 * vfxScale, 2);
         break;
 
       case 'plasma_cannon':
         this.vfx.spawnProjectile({
           origin: _origin,
           direction: _dir,
-          speed: 18,
+          speed: 18 + (powerLv - 1) * 1.2,
           owner: 'player',
           damage: scaledDmg,
           color: def.hexColor,
-          radius: 0.95,
+          radius: 0.95 * rangeMult,
           effect: 'stun',
         });
-        this.vfx.spawnBurst(_origin, def.hexColor, 16, 6.5, 1.1, 3);
+        this.vfx.spawnBurst(_origin, def.hexColor, Math.round(16 * vfxScale), 6.5 * vfxScale, 1.1 * vfxScale, 3);
         break;
 
       case 'meteor_strike': {
-        for (let i = 0; i < 3; i++) {
+        const meteors = 3 + extraCount;
+        const impactRadius = 4.5 * rangeMult;
+        for (let i = 0; i < meteors; i++) {
           _targetVec.copy(targetEnemy.runtime.pos);
-          _targetVec.x += (i - 1) * 1.1;
-          const isMain = i === 1;
+          _targetVec.x += (i - (meteors - 1) / 2) * 1.1;
+          const isMain = i === Math.floor(meteors / 2);
           const impactCenter = _targetVec.clone();
-          this.vfx.spawnMeteor(_targetVec, def.hexColor, i * 0.14, () => {
+          this.vfx.spawnMeteor(_targetVec, def.hexColor, i * 0.12, () => {
             if (isMain) {
               for (const e of this.getLivingEnemies()) {
-                if (e.runtime.pos.distanceTo(impactCenter) < 4.5) {
+                if (e.runtime.pos.distanceTo(impactCenter) < impactRadius) {
                   this.applyDamageToEnemy(e, scaledDmg, true, true, 'METEOR STRIKE');
                 }
               }
@@ -1076,11 +1160,11 @@ export class ArenaEngine {
       }
 
       case 'healing_power': {
-        const healAmt = Math.max(42, Math.round(this.player.maxHp * 0.22));
+        const healAmt = Math.max(stats.healBase, Math.round(this.player.maxHp * (0.22 + (powerLv - 1) * 0.05)));
         this.player.hp = Math.min(this.player.maxHp, this.player.hp + healAmt);
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 3.6, 0.5);
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 3.6 * vfxScale, 0.5);
         _targetVec.copy(this.player.pos).setY(1.2);
-        this.vfx.spawnBurst(_targetVec, def.hexColor, 16, 5.5, 1.0, -2);
+        this.vfx.spawnBurst(_targetVec, def.hexColor, Math.round(16 * vfxScale), 5.5, 1.0 * vfxScale, -2);
         this.lastDamageEvent = {
           id: this.damageEventSeq++,
           target: 'player',
@@ -1097,31 +1181,31 @@ export class ArenaEngine {
       case 'ultimate_energy_blast': {
         _targetVec.copy(targetEnemy.runtime.pos).setY(1.35);
         this.vfx.spawnLaserBeam(_origin, _targetVec, def.hexColor);
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 4.4, 0.45);
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 4.4 * vfxScale, 0.45);
         this.vfx.spawnProjectile({
           origin: _origin,
           direction: _dir,
-          speed: 25,
+          speed: 25 + (powerLv - 1) * 1.4,
           owner: 'player',
           damage: scaledDmg,
           color: def.hexColor,
-          radius: 1.05,
+          radius: 1.05 * rangeMult,
           effect: 'pierce',
         });
-        this.vfx.spawnBurst(_origin, def.hexColor, 20, 8, 1.2, 3);
+        this.vfx.spawnBurst(_origin, def.hexColor, Math.round(20 * vfxScale), 8 * vfxScale, 1.2 * vfxScale, 3);
         this.cameraShake = Math.max(this.cameraShake, 0.26);
         break;
       }
 
       case 'thunder_storm': {
         const living = this.getLivingEnemies();
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 5.2, 0.45);
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 5.2 * vfxScale, 0.45);
         for (const e of living) {
-          this.vfx.spawnPillar(e.runtime.pos, def.hexColor, 1.7, true);
-          this.vfx.spawnShockRing(e.runtime.pos, def.hexColor, 4.4, 0.48);
+          this.vfx.spawnPillar(e.runtime.pos, def.hexColor, 1.7 * vfxScale, true);
+          this.vfx.spawnShockRing(e.runtime.pos, def.hexColor, 4.4 * vfxScale, 0.48);
           _targetVec.copy(e.runtime.pos).setY(1.5);
-          this.vfx.spawnBurst(_targetVec, def.hexColor, 16, 8.5, 1.2, 5);
-          e.runtime.stunTimer = Math.max(e.runtime.stunTimer, 1.1);
+          this.vfx.spawnBurst(_targetVec, def.hexColor, Math.round(16 * vfxScale), 8.5, 1.2 * vfxScale, 5);
+          e.runtime.stunTimer = Math.max(e.runtime.stunTimer, 1.1 + durBonus * 0.35);
           this.applyDamageToEnemy(e, scaledDmg, true, false, 'THUNDER STORM');
         }
         this.cameraShake = Math.max(this.cameraShake, 0.3);
@@ -1136,14 +1220,15 @@ export class ArenaEngine {
         _v4.copy(_targetVec);
         _v4.y += 0.3;
         this.vfx.spawnLaserBeam(_v3, _v4, 0xfacc15);
-        this.vfx.spawnBurst(_targetVec, def.hexColor, 20, 8, 1.25, 4);
+        this.vfx.spawnBurst(_targetVec, def.hexColor, Math.round(20 * vfxScale), 8 * vfxScale, 1.25 * vfxScale, 4);
+        const sweepRadius = 3.4 * rangeMult;
         for (const e of this.getLivingEnemies()) {
-          if (e === targetEnemy || e.runtime.pos.distanceTo(targetEnemy.runtime.pos) < 3.4) {
-            e.runtime.stunTimer = Math.max(e.runtime.stunTimer, 0.7);
+          if (e === targetEnemy || e.runtime.pos.distanceTo(targetEnemy.runtime.pos) < sweepRadius) {
+            e.runtime.stunTimer = Math.max(e.runtime.stunTimer, 0.7 + durBonus * 0.25);
             this.applyDamageToEnemy(
               e,
-              e === targetEnemy ? scaledDmg : Math.round(scaledDmg * 0.72),
-              Math.random() < 0.35,
+              e === targetEnemy ? scaledDmg : Math.round(scaledDmg * 0.76),
+              Math.random() < 0.35 + critBonus,
               true,
               'MEGA LASER',
             );
@@ -1154,7 +1239,7 @@ export class ArenaEngine {
       }
 
       case 'dragon_fire': {
-        const angles = [-0.24, 0, 0.24];
+        const angles = extraCount >= 2 ? [-0.36, -0.18, 0, 0.18, 0.36] : extraCount === 1 ? [-0.3, -0.1, 0.1, 0.3] : [-0.24, 0, 0.24];
         for (const ang of angles) {
           const cos = Math.cos(ang);
           const sin = Math.sin(ang);
@@ -1162,27 +1247,28 @@ export class ArenaEngine {
           this.vfx.spawnProjectile({
             origin: _origin,
             direction: _v1,
-            speed: 18.5,
+            speed: 18.5 + (powerLv - 1) * 1.1,
             owner: 'player',
             damage: Math.round(scaledDmg * 0.78),
             color: def.hexColor,
-            radius: 0.75,
+            radius: 0.75 * rangeMult,
             effect: 'knockback',
           });
         }
-        this.vfx.spawnBurst(_origin, def.hexColor, 18, 7, 1.15, 3);
+        this.vfx.spawnBurst(_origin, def.hexColor, Math.round(18 * vfxScale), 7 * vfxScale, 1.15 * vfxScale, 3);
         break;
       }
 
       case 'ice_explosion': {
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 7.2, 0.55);
-        this.vfx.spawnBurst(_origin, def.hexColor, 22, 8.5, 1.2, 4);
+        const blastRadius = 6.8 * rangeMult;
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, blastRadius * 1.05, 0.55);
+        this.vfx.spawnBurst(_origin, def.hexColor, Math.round(22 * vfxScale), 8.5 * vfxScale, 1.2 * vfxScale, 4);
         const living = this.getLivingEnemies();
         for (const e of living) {
           const dist = e.runtime.pos.distanceTo(this.player.pos);
-          if (e === targetEnemy || dist < 6.8) {
-            e.runtime.slowTimer = Math.max(e.runtime.slowTimer, 5.0);
-            this.vfx.spawnPillar(e.runtime.pos, def.hexColor, 1.2, false);
+          if (e === targetEnemy || dist < blastRadius) {
+            e.runtime.slowTimer = Math.max(e.runtime.slowTimer, 5.0 + durBonus);
+            this.vfx.spawnPillar(e.runtime.pos, def.hexColor, 1.2 * vfxScale, false);
             this.applyDamageToEnemy(e, scaledDmg, false, true, 'ICE EXPLOSION');
           }
         }
@@ -1191,14 +1277,14 @@ export class ArenaEngine {
       }
 
       case 'shadow_strike': {
-        this.player.vel.x = _dir.x * 18.5;
-        this.player.vel.z = _dir.z * 18.5;
+        this.player.vel.x = _dir.x * (18.5 * rangeMult);
+        this.player.vel.z = _dir.z * (18.5 * rangeMult);
         this.player.iFrames = 0.38;
-        this.vfx.spawnBurst(_origin, def.hexColor, 18, 7, 1.1, 3);
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 3.8, 0.35);
+        this.vfx.spawnBurst(_origin, def.hexColor, Math.round(18 * vfxScale), 7 * vfxScale, 1.1 * vfxScale, 3);
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 3.8 * vfxScale, 0.35);
         for (const e of this.getLivingEnemies()) {
-          if (e === targetEnemy || this.player.pos.distanceTo(e.runtime.pos) < 5.0) {
-            const isCrit = Math.random() < 0.55;
+          if (e === targetEnemy || this.player.pos.distanceTo(e.runtime.pos) < 5.0 * rangeMult) {
+            const isCrit = Math.random() < 0.55 + critBonus;
             this.applyDamageToEnemy(e, scaledDmg, isCrit, true, 'SHADOW STRIKE');
           }
         }
@@ -1210,30 +1296,32 @@ export class ArenaEngine {
         this.vfx.spawnProjectile({
           origin: _origin,
           direction: _dir,
-          speed: 19.5,
+          speed: 19.5 + (powerLv - 1) * 1.2,
           owner: 'player',
           damage: scaledDmg,
           color: def.hexColor,
-          radius: 1.35,
+          radius: 1.35 * rangeMult,
           effect: 'knockback',
         });
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 4.8, 0.45);
-        this.vfx.spawnBurst(_origin, def.hexColor, 18, 7, 1.2, 2);
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 4.8 * vfxScale, 0.45);
+        this.vfx.spawnBurst(_origin, def.hexColor, Math.round(18 * vfxScale), 7 * vfxScale, 1.2 * vfxScale, 2);
         this.cameraShake = Math.max(this.cameraShake, 0.24);
         break;
       }
 
       case 'meteor_rain': {
         const living = this.getLivingEnemies();
-        for (let i = 0; i < 6; i++) {
+        const drops = 6 + extraCount;
+        const splashRadius = 3.5 * rangeMult;
+        for (let i = 0; i < drops; i++) {
           const aimEnemy = living[i % living.length] ?? targetEnemy;
           _targetVec.copy(aimEnemy.runtime.pos);
           _targetVec.x += ((i % 3) - 1) * 1.4;
           _targetVec.z += (Math.floor(i / 3) - 0.5) * 1.4;
           const impactCenter = _targetVec.clone();
-          this.vfx.spawnMeteor(_targetVec, def.hexColor, i * 0.1, () => {
+          this.vfx.spawnMeteor(_targetVec, def.hexColor, i * 0.09, () => {
             for (const e of this.getLivingEnemies()) {
-              if (e.runtime.pos.distanceTo(impactCenter) < 3.5) {
+              if (e.runtime.pos.distanceTo(impactCenter) < splashRadius) {
                 this.applyDamageToEnemy(
                   e,
                   Math.round(scaledDmg * 0.52),
@@ -1250,16 +1338,17 @@ export class ArenaEngine {
       }
 
       case 'super_shield': {
-        this.player.shieldTimer = 8.0;
+        this.player.shieldTimer = 8.0 + durBonus;
+        this.player.shieldDamageMult = 1 - stats.shieldReduction;
         this.player.superShieldActive = true;
         if (this.playerRig.shieldDome) this.playerRig.shieldDome.visible = true;
-        const healAmt = Math.max(22, Math.round(this.player.maxHp * 0.11));
+        const healAmt = Math.max(stats.healBase, Math.round(this.player.maxHp * (0.11 + (powerLv - 1) * 0.03)));
         this.player.hp = Math.min(this.player.maxHp, this.player.hp + healAmt);
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 4.8, 0.5);
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 4.8 * vfxScale, 0.5);
         for (const e of this.getLivingEnemies()) {
-          if (this.player.pos.distanceTo(e.runtime.pos) < 4.5) {
+          if (this.player.pos.distanceTo(e.runtime.pos) < 4.5 * rangeMult) {
             _v1.copy(e.runtime.pos).sub(this.player.pos).setY(0).normalize();
-            e.runtime.vel.addScaledVector(_v1, 9.0);
+            e.runtime.vel.addScaledVector(_v1, 9.0 * rangeMult);
             this.applyDamageToEnemy(e, scaledDmg, false, true, 'AEGIS PULSE');
           }
         }
@@ -1267,11 +1356,11 @@ export class ArenaEngine {
       }
 
       case 'rage_mode': {
-        this.player.rageTimer = 7.5;
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 4.8, 0.5);
-        this.vfx.spawnBurst(_origin, def.hexColor, 20, 8, 1.2, 4);
+        this.player.rageTimer = 7.5 + durBonus;
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 4.8 * vfxScale, 0.5);
+        this.vfx.spawnBurst(_origin, def.hexColor, Math.round(20 * vfxScale), 8 * vfxScale, 1.2 * vfxScale, 4);
         for (const e of this.getLivingEnemies()) {
-          if (this.player.pos.distanceTo(e.runtime.pos) < 4.2) {
+          if (this.player.pos.distanceTo(e.runtime.pos) < 4.2 * rangeMult) {
             this.applyDamageToEnemy(e, scaledDmg, true, false, 'RAGE ROAR');
           }
         }
@@ -1280,12 +1369,12 @@ export class ArenaEngine {
       }
 
       case 'time_slow': {
-        this.timeSlowTimer = 6.0;
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 8.5, 0.65);
+        this.timeSlowTimer = 6.0 + durBonus;
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 8.5 * vfxScale, 0.65);
         for (const e of this.getLivingEnemies()) {
-          e.runtime.slowTimer = Math.max(e.runtime.slowTimer, 6.0);
+          e.runtime.slowTimer = Math.max(e.runtime.slowTimer, 6.0 + durBonus);
           _targetVec.copy(e.runtime.pos).setY(1.3);
-          this.vfx.spawnBurst(_targetVec, def.hexColor, 10, 4, 0.9, 1);
+          this.vfx.spawnBurst(_targetVec, def.hexColor, Math.round(10 * vfxScale), 4, 0.9 * vfxScale, 1);
           this.applyDamageToEnemy(e, scaledDmg, false, true, 'TIME SLOW');
         }
         break;
@@ -1293,8 +1382,8 @@ export class ArenaEngine {
 
       case 'teleport_attack': {
         _origin.copy(this.player.pos).setY(1.2);
-        this.vfx.spawnBurst(_origin, def.hexColor, 16, 6, 1.0, 2);
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 3.2, 0.35);
+        this.vfx.spawnBurst(_origin, def.hexColor, Math.round(16 * vfxScale), 6, 1.0 * vfxScale, 2);
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 3.2 * vfxScale, 0.35);
 
         const maxR = ARENA_RADIUS - 1.2;
         const bx = targetEnemy.runtime.pos.x + _dir.x * 2.1;
@@ -1305,29 +1394,40 @@ export class ArenaEngine {
         this.player.iFrames = 0.45;
 
         _targetVec.copy(this.player.pos).setY(1.3);
-        this.vfx.spawnBurst(_targetVec, def.hexColor, 18, 7, 1.1, 3);
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 4.0, 0.4);
-        this.applyDamageToEnemy(targetEnemy, scaledDmg, true, true, 'TELEPORT CRIT!');
+        this.vfx.spawnBurst(_targetVec, def.hexColor, Math.round(18 * vfxScale), 7 * vfxScale, 1.1 * vfxScale, 3);
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 4.0 * vfxScale, 0.4);
+        for (const e of this.getLivingEnemies()) {
+          if (e === targetEnemy || e.runtime.pos.distanceTo(this.player.pos) < 3.0 * rangeMult) {
+            this.applyDamageToEnemy(e, scaledDmg, true, true, 'TELEPORT CRIT!');
+          }
+        }
         this.cameraShake = Math.max(this.cameraShake, 0.26);
         break;
       }
 
       case 'hero_surge': {
-        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 3.6, 0.36);
-        this.vfx.spawnProjectile({
-          origin: _origin,
-          direction: _dir,
-          speed: 22.0,
-          owner: 'player',
-          damage: scaledDmg,
-          color: def.hexColor,
-          radius: 0.78,
-          effect: 'knockback',
-        });
-        this.vfx.spawnBurst(_origin, def.hexColor, 12, 5.5, 0.9, 3);
+        const shots = 1 + extraCount;
+        this.vfx.spawnShockRing(this.player.pos, def.hexColor, 3.6 * vfxScale, 0.36);
+        for (let i = 0; i < shots; i++) {
+          const ang = shots === 1 ? 0 : (i - (shots - 1) / 2) * 0.2;
+          const cos = Math.cos(ang);
+          const sin = Math.sin(ang);
+          _v1.set(_dir.x * cos - _dir.z * sin, 0, _dir.x * sin + _dir.z * cos);
+          this.vfx.spawnProjectile({
+            origin: _origin,
+            direction: _v1,
+            speed: 22.0 + (powerLv - 1) * 1.2,
+            owner: 'player',
+            damage: i === 0 || shots === 1 ? scaledDmg : Math.round(scaledDmg * 0.7),
+            color: def.hexColor,
+            radius: 0.78 * rangeMult,
+            effect: 'knockback',
+          });
+        }
+        this.vfx.spawnBurst(_origin, def.hexColor, Math.round(12 * vfxScale), 5.5 * vfxScale, 0.9 * vfxScale, 3);
         for (const e of this.getLivingEnemies()) {
-          if (this.player.pos.distanceTo(e.runtime.pos) < 3.4) {
-            this.applyDamageToEnemy(e, Math.round(scaledDmg * 0.75), false, false, 'SURGE');
+          if (this.player.pos.distanceTo(e.runtime.pos) < 3.4 * rangeMult) {
+            this.applyDamageToEnemy(e, Math.round(scaledDmg * 0.78), Math.random() < critBonus, false, 'SURGE');
           }
         }
         break;
@@ -1335,12 +1435,12 @@ export class ArenaEngine {
 
       case 'ultimate': {
         this.player.iFrames = 0.85;
-        this.vfx.spawnShockRing(this.player.pos, 0xf43f5e, 8.0, 0.65);
+        this.vfx.spawnShockRing(this.player.pos, 0xf43f5e, 8.0 * vfxScale, 0.65);
         for (const e of this.getLivingEnemies()) {
-          this.vfx.spawnShockRing(e.runtime.pos, 0xfacc15, 5.8, 0.58);
-          this.vfx.spawnPillar(e.runtime.pos, 0xf43f5e, 1.8, true);
+          this.vfx.spawnShockRing(e.runtime.pos, 0xfacc15, 5.8 * vfxScale, 0.58);
+          this.vfx.spawnPillar(e.runtime.pos, 0xf43f5e, 1.8 * vfxScale, true);
           _targetVec.copy(e.runtime.pos).setY(1.6);
-          this.vfx.spawnBurst(_targetVec, 0xf43f5e, 20, 10, 1.3, 5);
+          this.vfx.spawnBurst(_targetVec, 0xf43f5e, Math.round(20 * vfxScale), 10, 1.3 * vfxScale, 5);
           this.applyDamageToEnemy(e, scaledDmg, true, true, 'COSMIC NOVA!');
         }
         this.hitstopTimer = 0.06;
@@ -2428,7 +2528,7 @@ export class ArenaEngine {
       _targetVec.copy(this.player.pos).setY(1.2);
       this.vfx.spawnBurst(_targetVec, 0x60a5fa, 10, 4.5, 0.8, 3);
     } else if (this.player.shieldTimer > 0) {
-      const shieldMult = this.player.superShieldActive ? 0.2 : 0.35;
+      const shieldMult = this.player.shieldDamageMult ?? (this.player.superShieldActive ? 0.2 : 0.35);
       dmg = Math.max(1, Math.round(dmg * shieldMult));
       soundEngine.playBlock();
       this.vfx.spawnShockRing(this.player.pos, 0x3b82f6, 2.2, 0.25);

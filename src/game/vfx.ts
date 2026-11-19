@@ -286,72 +286,84 @@ export class VfxManager {
   }
 
   public spawnShockRing(pos: THREE.Vector3, color: number, maxScale = 4.2, duration = 0.42) {
-    for (const r of this.rings) {
-      if (r.active) continue;
-      r.active = true;
-      r.life = 0;
-      r.maxLife = duration;
-      r.maxScale = maxScale;
-      r.mesh.visible = true;
-      r.mesh.position.set(pos.x, Math.max(0.08, pos.y), pos.z);
-      r.mesh.scale.setScalar(0.35);
-      r.mat.color.setHex(color);
-      r.mat.opacity = 0.95;
-      break;
+    let slot = this.rings.find((r) => !r.active);
+    if (!slot) {
+      slot = this.rings.reduce((oldest, cur) =>
+        cur.life / cur.maxLife > oldest.life / oldest.maxLife ? cur : oldest,
+      );
     }
+    slot.active = true;
+    slot.life = 0;
+    slot.maxLife = duration;
+    slot.maxScale = maxScale;
+    slot.mesh.visible = true;
+    slot.mesh.position.set(pos.x, Math.max(0.08, pos.y), pos.z);
+    slot.mesh.scale.setScalar(0.35);
+    slot.mat.color.setHex(color);
+    slot.mat.opacity = 0.95;
   }
 
   public spawnPillar(pos: THREE.Vector3, color: number, heightScale = 1.2, inverted = false) {
-    for (const pl of this.pillars) {
-      if (pl.active) continue;
-      pl.active = true;
-      pl.life = 0;
-      pl.maxLife = 0.72;
-      pl.mesh.visible = true;
-      pl.mesh.position.set(pos.x, inverted ? 2.6 * heightScale : 1.1 * heightScale, pos.z);
-      pl.mesh.rotation.x = inverted ? Math.PI : 0;
-      pl.mesh.scale.set(heightScale, heightScale, heightScale);
-      pl.mat.color.setHex(color);
-      pl.mat.emissive.setHex(color);
-      pl.mat.opacity = 0.95;
-      break;
+    let slot = this.pillars.find((pl) => !pl.active);
+    if (!slot) {
+      slot = this.pillars.reduce((oldest, cur) =>
+        cur.life / cur.maxLife > oldest.life / oldest.maxLife ? cur : oldest,
+      );
     }
+    slot.active = true;
+    slot.life = 0;
+    slot.maxLife = 0.72;
+    slot.mesh.visible = true;
+    slot.mesh.position.set(pos.x, inverted ? 2.6 * heightScale : 1.1 * heightScale, pos.z);
+    slot.mesh.rotation.x = inverted ? Math.PI : 0;
+    slot.mesh.scale.set(heightScale, heightScale, heightScale);
+    slot.mat.color.setHex(color);
+    slot.mat.emissive.setHex(color);
+    slot.mat.opacity = 0.95;
   }
 
   public spawnLaserBeam(from: THREE.Vector3, to: THREE.Vector3, color: number) {
-    for (const b of this.beams) {
-      if (b.active) continue;
-      b.active = true;
-      b.life = 0;
-      b.maxLife = 0.24;
-      b.mat.color.setHex(color);
-      b.mat.opacity = 0.98;
-      _tmpVec.copy(to).sub(from);
-      const len = Math.max(0.5, _tmpVec.length());
-      b.mesh.position.copy(from).addScaledVector(_tmpVec, 0.5);
-      b.mesh.scale.set(1.2, len, 1.2);
-      b.mesh.quaternion.setFromUnitVectors(_upVec, _tmpVec.normalize());
-      b.mesh.visible = true;
-      break;
+    let slot = this.beams.find((b) => !b.active);
+    if (!slot) {
+      slot = this.beams.reduce((oldest, cur) =>
+        cur.life / cur.maxLife > oldest.life / oldest.maxLife ? cur : oldest,
+      );
     }
+    slot.active = true;
+    slot.life = 0;
+    slot.maxLife = 0.24;
+    slot.mat.color.setHex(color);
+    slot.mat.opacity = 0.98;
+    _tmpVec.copy(to).sub(from);
+    const len = Math.max(0.5, _tmpVec.length());
+    slot.mesh.position.copy(from).addScaledVector(_tmpVec, 0.5);
+    slot.mesh.scale.set(1.2, len, 1.2);
+    slot.mesh.quaternion.setFromUnitVectors(_upVec, _tmpVec.normalize());
+    slot.mesh.visible = true;
   }
 
   public spawnMeteor(targetPos: THREE.Vector3, color: number, delay = 0, onImpact?: () => void) {
-    for (const m of this.meteors) {
-      if (m.active) continue;
-      m.active = true;
-      m.progress = 0;
-      m.duration = 0.42;
-      m.delay = delay;
-      m.color = color;
-      m.mat.color.setHex(color);
-      m.targetPos.set(targetPos.x, 0.2, targetPos.z);
-      m.startPos.set(targetPos.x + (Math.random() - 0.5) * 3.2, 11.5, targetPos.z + (Math.random() - 0.5) * 3.2);
-      m.mesh.position.copy(m.startPos);
-      m.mesh.visible = delay <= 0;
-      m.onImpact = onImpact;
-      break;
+    let slot = this.meteors.find((m) => !m.active);
+    if (!slot) {
+      slot = this.meteors.reduce((oldest, cur) =>
+        cur.progress > oldest.progress ? cur : oldest,
+      );
     }
+    slot.active = true;
+    slot.progress = 0;
+    slot.duration = 0.42;
+    slot.delay = delay;
+    slot.color = color;
+    slot.mat.color.setHex(color);
+    slot.targetPos.set(targetPos.x, 0.2, targetPos.z);
+    slot.startPos.set(
+      targetPos.x + (Math.random() - 0.5) * 3.2,
+      11.5,
+      targetPos.z + (Math.random() - 0.5) * 3.2,
+    );
+    slot.mesh.position.copy(slot.startPos);
+    slot.mesh.visible = delay <= 0;
+    slot.onImpact = onImpact;
   }
 
   public spawnTransferOrb(start: THREE.Vector3, end: THREE.Vector3, color: number) {
@@ -382,24 +394,26 @@ export class VfxManager {
     effect?: ActiveProjectile['effect'];
     homing?: boolean;
   }) {
-    for (const pr of this.projectiles) {
-      if (pr.active) continue;
-      pr.active = true;
-      pr.owner = opts.owner;
-      pr.damage = opts.damage;
-      pr.color = opts.color;
-      pr.radius = opts.radius ?? 0.55;
-      pr.life = 2.4;
-      pr.effect = opts.effect ?? 'none';
-      pr.homing = Boolean(opts.homing);
-      pr.coreMat.color.setHex(opts.color);
-      const scale = (opts.radius ?? 0.45) / 0.45;
-      pr.group.scale.setScalar(scale);
-      pr.group.position.copy(opts.origin);
-      pr.vel.copy(opts.direction).normalize().multiplyScalar(opts.speed);
-      pr.group.visible = true;
-      break;
+    let pr = this.projectiles.find((item) => !item.active);
+    if (!pr) {
+      // Recycle oldest projectile (prefer player/lowest life) so unlimited power spam never freezes or drops inputs
+      pr = this.projectiles.reduce((oldest, cur) => (cur.life < oldest.life ? cur : oldest));
     }
+    pr.active = true;
+    pr.owner = opts.owner;
+    pr.damage = opts.damage;
+    pr.color = opts.color;
+    pr.radius = opts.radius ?? 0.55;
+    pr.life = 2.4;
+    pr.effect = opts.effect ?? 'none';
+    pr.homing = Boolean(opts.homing);
+    pr.coreMat.color.setHex(opts.color);
+    pr.haloMat.color.setHex(opts.color);
+    const scale = (opts.radius ?? 0.45) / 0.45;
+    pr.group.scale.setScalar(scale);
+    pr.group.position.copy(opts.origin);
+    pr.vel.copy(opts.direction).normalize().multiplyScalar(opts.speed);
+    pr.group.visible = true;
   }
 
   public clearProjectiles() {
