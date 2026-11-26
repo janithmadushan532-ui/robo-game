@@ -86,7 +86,15 @@ export const McqDraftOverlay: React.FC<McqDraftOverlayProps> = ({
   };
 
   return (
-    <div className="game-scroll absolute inset-0 flex flex-col justify-between gap-2 overflow-y-auto p-2 sm:p-4">
+    <div
+      className="game-scroll absolute inset-0 flex flex-col justify-between gap-2 overflow-y-auto p-2 sm:p-4"
+      style={{
+        paddingTop: 'max(8px, env(safe-area-inset-top, 0px))',
+        paddingBottom: 'max(8px, env(safe-area-inset-bottom, 0px))',
+        paddingLeft: 'max(8px, env(safe-area-inset-left, 0px))',
+        paddingRight: 'max(8px, env(safe-area-inset-right, 0px))',
+      }}
+    >
       {/* Top Status Strip */}
       <div className="mx-auto flex w-full max-w-4xl flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-700/80 bg-slate-950/94 px-3 py-2 shadow-xl sm:px-4">
         <div>

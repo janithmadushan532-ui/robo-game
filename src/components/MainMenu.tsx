@@ -1,19 +1,26 @@
 import React from 'react';
 import {
   BookOpen,
+  Coins,
   Cpu,
   Flame,
+  Layers,
   Play,
   RotateCcw,
   Settings,
   Shield,
+  ShoppingBag,
   Skull,
   Swords,
   Volume2,
   VolumeX,
 } from 'lucide-react';
 import { BOSS_LEVELS } from '../data/levels';
-import { PLAYER_POWER_LIST } from '../data/powers';
+import {
+  MAX_LOADOUT_SELECTION,
+  PLAYER_POWER_LIST,
+  SHOP_POWER_CATALOG,
+} from '../data/powers';
 import { ActiveModal, GraphicsQuality, SavedProgress, ScienceUnit } from '../types/game';
 
 interface MainMenuProps {
@@ -44,7 +51,15 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   onCycleGraphics,
 }) => {
   return (
-    <div className="game-scroll pointer-events-auto absolute inset-0 flex flex-col justify-between gap-2 overflow-y-auto p-2.5 sm:p-5">
+    <div
+      className="game-scroll pointer-events-auto absolute inset-0 flex flex-col justify-between gap-2 overflow-y-auto p-2.5 sm:p-5"
+      style={{
+        paddingTop: 'max(10px, env(safe-area-inset-top, 0px))',
+        paddingBottom: 'max(10px, env(safe-area-inset-bottom, 0px))',
+        paddingLeft: 'max(10px, env(safe-area-inset-left, 0px))',
+        paddingRight: 'max(10px, env(safe-area-inset-right, 0px))',
+      }}
+    >
       {/* Top Bar: Selected Science Unit + Quick Audio / Graphics Controls */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <button
@@ -62,7 +77,16 @@ export const MainMenu: React.FC<MainMenuProps> = ({
           </div>
         </button>
 
-        <div className="flex items-center gap-1.5 sm:gap-2">
+        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+          <button
+            onClick={() => onOpenModal('shop')}
+            title="Open Power Shop"
+            className="flex items-center gap-1.5 rounded-lg border border-amber-400/60 bg-amber-950/75 px-2.5 py-1.5 text-[11px] font-black tabular-nums text-amber-300 transition hover:border-amber-300 hover:bg-amber-900/75 sm:px-3 sm:py-2 sm:text-xs"
+          >
+            <Coins className="h-4 w-4 text-amber-400" />
+            <span>{progress.coins.toLocaleString()} COINS</span>
+          </button>
+
           <button
             onClick={onToggleSound}
             title="Sound On/Off"
@@ -193,7 +217,34 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             </button>
           </div>
 
+          {/* Featured Sci-Fi Power Shop Entry Button */}
+          <button
+            type="button"
+            onClick={() => onOpenModal('shop')}
+            data-testid="menu-shop-btn"
+            className="group relative flex min-h-[56px] w-full items-center justify-between gap-3 overflow-hidden rounded-xl border-2 border-amber-400 bg-gradient-to-r from-amber-950/95 via-slate-900/95 to-cyan-950/90 px-4 py-3 text-left shadow-[0_0_24px_rgba(251,191,36,0.35)] transition hover:border-amber-300 hover:shadow-[0_0_34px_rgba(251,191,36,0.58)] active:scale-[0.985]"
+          >
+            <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-amber-200/80 to-transparent" />
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-amber-200/70 bg-gradient-to-br from-amber-400 to-orange-500 text-slate-950 shadow-[0_0_16px_rgba(251,191,36,0.55)] transition group-hover:scale-105 sm:h-11 sm:w-11">
+                <ShoppingBag className="h-5 w-5 sm:h-6 sm:w-6" />
+              </div>
+              <div>
+                <div className="font-display text-base font-black tracking-[0.14em] text-amber-300 drop-shadow-[0_0_8px_rgba(251,191,36,0.45)] sm:text-lg">
+                  POWER SHOP
+                </div>
+                <div className="font-display text-[11px] font-bold tabular-nums text-cyan-200/90">
+                  {progress.purchasedPowers.length}/{SHOP_POWER_CATALOG.length} Unlocked · {progress.coins.toLocaleString()} Coins
+                </div>
+              </div>
+            </div>
+            <span className="shrink-0 rounded-lg border border-amber-300/60 bg-amber-400/20 px-2.5 py-1 font-display text-[11px] font-black tracking-wider text-amber-200 transition group-hover:bg-amber-400 group-hover:text-slate-950">
+              OPEN
+            </span>
+          </button>
+
           <div className="grid grid-cols-2 gap-2">
+
             <button
               onClick={() => onOpenModal('levels')}
               className="flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950/90 px-3.5 py-2.5 text-xs font-bold tracking-wide text-slate-100 transition hover:border-sky-400 hover:bg-slate-900"
@@ -224,6 +275,22 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             >
               <Skull className="h-4 w-4 text-rose-400" />
               <span>MONSTER COLLECTION</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => onOpenModal('loadout')}
+              data-testid="menu-loadout-btn"
+              className="col-span-2 flex items-center justify-between rounded-lg border border-cyan-500/55 bg-slate-950/92 px-3.5 py-2 text-xs font-bold tracking-wide text-cyan-100 transition hover:border-cyan-300 hover:bg-slate-900"
+            >
+              <span className="flex items-center gap-2">
+                <Layers className="h-4 w-4 text-cyan-400" />
+                <span>POWER LOADOUT</span>
+              </span>
+              <span className="font-display text-[11px] font-bold tabular-nums text-cyan-300">
+                {progress.activeLoadout.filter((id) => progress.purchasedPowers.includes(id)).length}/
+                {MAX_LOADOUT_SELECTION} SHOP EQUIPPED · {progress.purchasedPowers.length} PURCHASED
+              </span>
             </button>
           </div>
         </div>

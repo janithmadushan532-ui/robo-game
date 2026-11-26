@@ -1,4 +1,4 @@
-import { MonsterPowerDef, MonsterPowerId, PlayerPowerDef, PowerId } from '../types/game';
+import { MonsterPowerDef, MonsterPowerId, PlayerPowerDef, PowerId, ShopPowerDef } from '../types/game';
 
 export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
   fire: {
@@ -6,6 +6,7 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Fire Blast',
     sinhalaName: 'ගිනි ප්‍රහාරය (තාප පිපිරුම)',
     damage: 28,
+    activeDuration: 3.5,
     cooldown: 4.5,
     energyCost: 18,
     color: '#ff5722',
@@ -21,6 +22,7 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Freeze Attack',
     sinhalaName: 'අයිස් ප්‍රහාරය (ශීත ස්ඵටික)',
     damage: 24,
+    activeDuration: 4.0,
     cooldown: 5.0,
     energyCost: 18,
     color: '#38bdf8',
@@ -36,6 +38,7 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Lightning Power',
     sinhalaName: 'විදුලි බලය (අධි වෝල්ටීය)',
     damage: 32,
+    activeDuration: 3.5,
     cooldown: 5.5,
     energyCost: 22,
     color: '#facc15',
@@ -51,7 +54,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Thunder Strike',
     sinhalaName: 'හෙණ ප්‍රහාරය (අකුණු කුළුණ)',
     damage: 36,
-    cooldown: 7.0,
+    activeDuration: 4.0,
+    cooldown: 6.5,
     energyCost: 26,
     color: '#818cf8',
     hexColor: 0x818cf8,
@@ -66,7 +70,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Earth Power',
     sinhalaName: 'පෘථිවි බලය (ශිලා ප්‍රහාරය)',
     damage: 30,
-    cooldown: 6.0,
+    activeDuration: 4.5,
+    cooldown: 5.5,
     energyCost: 22,
     color: '#a3e635',
     hexColor: 0x84cc16,
@@ -81,6 +86,7 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Wind Power',
     sinhalaName: 'සුළං බලය (වායු සුළි)',
     damage: 22,
+    activeDuration: 4.0,
     cooldown: 4.0,
     energyCost: 15,
     color: '#2dd4bf',
@@ -96,7 +102,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Energy Shield',
     sinhalaName: 'ශක්ති පලිහ (විද්‍යුත් චුම්බක)',
     damage: 10,
-    cooldown: 10.0,
+    activeDuration: 6.0,
+    cooldown: 7.5,
     energyCost: 20,
     color: '#60a5fa',
     hexColor: 0x3b82f6,
@@ -111,7 +118,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Super Punch',
     sinhalaName: 'සුපිරි පහර (චාලක ගම්‍යතාව)',
     damage: 38,
-    cooldown: 6.5,
+    activeDuration: 3.5,
+    cooldown: 5.5,
     energyCost: 24,
     color: '#fb923c',
     hexColor: 0xf97316,
@@ -126,7 +134,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Energy Blast',
     sinhalaName: 'ශක්ති ප්‍රහාරය (ප්ලාස්මා ධාරාව)',
     damage: 34,
-    cooldown: 6.0,
+    activeDuration: 3.5,
+    cooldown: 5.5,
     energyCost: 24,
     color: '#e879f9',
     hexColor: 0xd946ef,
@@ -141,6 +150,7 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Laser Blast',
     sinhalaName: 'ලේසර් ප්‍රහාරය (ආලෝක කිරණ)',
     damage: 30,
+    activeDuration: 3.2,
     cooldown: 4.5,
     energyCost: 20,
     color: '#ef4444',
@@ -156,7 +166,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Rocket Attack',
     sinhalaName: 'රොකට් ප්‍රහාරය (මිසයිල)',
     damage: 36,
-    cooldown: 6.5,
+    activeDuration: 3.8,
+    cooldown: 6.0,
     energyCost: 25,
     color: '#f97316',
     hexColor: 0xf97316,
@@ -171,7 +182,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Speed Boost',
     sinhalaName: 'වේග වර්ධකය (හයිපර් සර්වෝ)',
     damage: 0,
-    cooldown: 11.0,
+    activeDuration: 6.0,
+    cooldown: 8.5,
     energyCost: 16,
     color: '#22d3ee',
     hexColor: 0x22d3ee,
@@ -186,7 +198,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Plasma Cannon',
     sinhalaName: 'ප්ලාස්මා කාලතුවක්කුව',
     damage: 42,
-    cooldown: 7.5,
+    activeDuration: 4.0,
+    cooldown: 6.5,
     energyCost: 28,
     color: '#c084fc',
     hexColor: 0xa855f7,
@@ -201,7 +214,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Ground Shockwave',
     sinhalaName: 'භූ කම්පන තරංගය',
     damage: 33,
-    cooldown: 6.5,
+    activeDuration: 4.2,
+    cooldown: 5.8,
     energyCost: 22,
     color: '#f59e0b',
     hexColor: 0xf59e0b,
@@ -216,7 +230,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Meteor Strike',
     sinhalaName: 'උල්කාපාත ප්‍රහාරය',
     damage: 46,
-    cooldown: 9.0,
+    activeDuration: 4.5,
+    cooldown: 7.5,
     energyCost: 30,
     color: '#fb7185',
     hexColor: 0xf43f5e,
@@ -231,7 +246,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Healing Power',
     sinhalaName: 'සුව කිරීමේ බලය (නැනෝ අලුත්වැඩියාව)',
     damage: 0,
-    cooldown: 12.0,
+    activeDuration: 4.0,
+    cooldown: 10.0,
     energyCost: 24,
     color: '#34d399',
     hexColor: 0x10b981,
@@ -246,7 +262,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Ultimate Energy Blast',
     sinhalaName: 'මහා ශක්ති විධාරණය',
     damage: 54,
-    cooldown: 8.5,
+    activeDuration: 4.2,
+    cooldown: 7.5,
     energyCost: 34,
     color: '#f472b6',
     hexColor: 0xec4899,
@@ -261,7 +278,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Thunder Storm Attack',
     sinhalaName: 'මහා අකුණු කුණාටුව',
     damage: 44,
-    cooldown: 8.0,
+    activeDuration: 4.5,
+    cooldown: 7.0,
     energyCost: 30,
     color: '#fde047',
     hexColor: 0xeab308,
@@ -276,7 +294,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Mega Laser',
     sinhalaName: 'මෙගා ලේසර් කිරණය',
     damage: 50,
-    cooldown: 7.5,
+    activeDuration: 3.8,
+    cooldown: 6.5,
     energyCost: 30,
     color: '#fb7185',
     hexColor: 0xf43f5e,
@@ -291,7 +310,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Dragon Fire',
     sinhalaName: 'මකර ගිනි ජාලාව',
     damage: 38,
-    cooldown: 6.0,
+    activeDuration: 4.0,
+    cooldown: 5.5,
     energyCost: 24,
     color: '#fb923c',
     hexColor: 0xf97316,
@@ -306,7 +326,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Ice Explosion',
     sinhalaName: 'අයිස් පිපිරුම් තරංගය',
     damage: 40,
-    cooldown: 7.0,
+    activeDuration: 5.0,
+    cooldown: 6.5,
     energyCost: 26,
     color: '#67e8f9',
     hexColor: 0x06b6d4,
@@ -321,7 +342,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Shadow Strike',
     sinhalaName: 'අඳුරු ඡායා ප්‍රහාරය',
     damage: 46,
-    cooldown: 6.5,
+    activeDuration: 3.6,
+    cooldown: 5.8,
     energyCost: 25,
     color: '#c084fc',
     hexColor: 0xa855f7,
@@ -336,7 +358,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Giant Energy Wave',
     sinhalaName: 'යෝධ ශක්ති තරංගය',
     damage: 48,
-    cooldown: 7.2,
+    activeDuration: 4.2,
+    cooldown: 6.5,
     energyCost: 28,
     color: '#34d399',
     hexColor: 0x10b981,
@@ -351,7 +374,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Meteor Rain',
     sinhalaName: 'මහා උල්කාපාත වර්ෂාව',
     damage: 56,
-    cooldown: 10.0,
+    activeDuration: 4.8,
+    cooldown: 8.5,
     energyCost: 34,
     color: '#f87171',
     hexColor: 0xdc2626,
@@ -366,7 +390,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Super Shield',
     sinhalaName: 'සුපිරි ශක්ති පලිහ',
     damage: 20,
-    cooldown: 12.5,
+    activeDuration: 8.0,
+    cooldown: 9.5,
     energyCost: 24,
     color: '#60a5fa',
     hexColor: 0x2563eb,
@@ -381,7 +406,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Rage Mode',
     sinhalaName: 'කෝපාවිෂ්ට රණශූර බලය',
     damage: 18,
-    cooldown: 13.0,
+    activeDuration: 7.5,
+    cooldown: 9.5,
     energyCost: 22,
     color: '#ef4444',
     hexColor: 0xdc2626,
@@ -396,7 +422,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Time Slow',
     sinhalaName: 'කාල මන්දගාමී බලය',
     damage: 15,
-    cooldown: 13.5,
+    activeDuration: 6.0,
+    cooldown: 10.0,
     energyCost: 26,
     color: '#2dd4bf',
     hexColor: 0x14b8a6,
@@ -411,7 +438,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Teleport Attack',
     sinhalaName: 'ක්ෂණික විද්‍යුත් පැනීම',
     damage: 44,
-    cooldown: 6.2,
+    activeDuration: 3.2,
+    cooldown: 5.5,
     energyCost: 24,
     color: '#38bdf8',
     hexColor: 0x0ea5e9,
@@ -426,6 +454,7 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Hero Surge',
     sinhalaName: 'නිදහස් ශක්ති ප්‍රහාරය',
     damage: 26,
+    activeDuration: 2.2,
     cooldown: 3.8,
     energyCost: 12,
     color: '#fbbf24',
@@ -441,7 +470,8 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
     name: 'Ultimate Power',
     sinhalaName: 'අතිශය බලය (විශ්වීය නෝවා)',
     damage: 64,
-    cooldown: 12.0,
+    activeDuration: 4.5,
+    cooldown: 6.0,
     energyCost: 0,
     color: '#f43f5e',
     hexColor: 0xf43f5e,
@@ -454,6 +484,74 @@ export const PLAYER_POWERS: Record<PowerId, PlayerPowerDef> = {
 };
 
 export const PLAYER_POWER_LIST: PlayerPowerDef[] = Object.values(PLAYER_POWERS);
+
+export const SHOP_POWER_CATALOG: ShopPowerDef[] = [
+  { powerId: 'healing_power', price: 600, tier: 'SPECIAL' },
+  { powerId: 'super_shield', price: 900, tier: 'SPECIAL' },
+  { powerId: 'time_slow', price: 1200, tier: 'ELITE' },
+  { powerId: 'rage_mode', price: 1500, tier: 'ELITE' },
+  { powerId: 'teleport_attack', price: 1800, tier: 'ELITE' },
+  { powerId: 'mega_laser', price: 2200, tier: 'LEGENDARY' },
+  { powerId: 'thunder_storm', price: 2600, tier: 'LEGENDARY' },
+  { powerId: 'meteor_rain', price: 3200, tier: 'LEGENDARY' },
+];
+
+export const SHOP_POWER_ID_SET = new Set<PowerId>(
+  SHOP_POWER_CATALOG.map((item) => item.powerId),
+);
+
+export const SHOP_SLOT_HOTKEYS = ['6', '7', '8', '9', '0', '-', '=', 'R'];
+
+export const MAX_BATTLE_POWER_SLOTS = 10;
+export const MAX_PURCHASED_BATTLE_SLOTS = MAX_BATTLE_POWER_SLOTS - 5; // 5 extra slots alongside 4 MCQ + 1 FREE
+export const MAX_LOADOUT_SELECTION = MAX_PURCHASED_BATTLE_SLOTS;
+
+export function getPurchasedPowerStartQuantity(
+  upgrades: Partial<Record<PowerId, number>> | undefined,
+  powerId: PowerId,
+): number {
+  const lv = getPowerLevel(upgrades, powerId);
+  if (lv >= 5) return 4;
+  if (lv >= 3) return 3;
+  return 2;
+}
+
+export function getOwnedInventoryPowers(
+  purchasedPowers: PowerId[],
+  collectedPowers: PowerId[],
+): PowerId[] {
+  const seen = new Set<PowerId>();
+  const out: PowerId[] = [];
+  for (const pid of [...purchasedPowers, ...collectedPowers]) {
+    if (pid === 'ultimate' || pid === 'hero_surge') continue;
+    if (!seen.has(pid)) {
+      seen.add(pid);
+      out.push(pid);
+    }
+  }
+  return out;
+}
+
+export function computeBattleExtraPowers(
+  activeLoadout: PowerId[],
+  purchasedPowers: PowerId[],
+  mcqSlotPowers: (PowerId | null)[],
+): PowerId[] {
+  const maxExtras = Math.max(0, MAX_PURCHASED_BATTLE_SLOTS);
+  const purchasedSet = new Set<PowerId>(purchasedPowers);
+  const mcqSet = new Set<PowerId>(mcqSlotPowers.filter((p): p is PowerId => p !== null));
+  const candidates = activeLoadout;
+
+  const extras: PowerId[] = [];
+  for (const pid of candidates) {
+    if (extras.length >= maxExtras) break;
+    if (pid === 'ultimate' || pid === 'hero_surge') continue;
+    if (!purchasedSet.has(pid) || mcqSet.has(pid) || extras.includes(pid)) continue;
+    extras.push(pid);
+  }
+  // If user has purchased powers and activeLoadout has room or was uninitialized, keep explicit loadout order
+  return extras;
+}
 
 export function createEmptyPowerCooldowns(): Record<PowerId, number> {
   return {

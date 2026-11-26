@@ -5,7 +5,9 @@ import {
   createEmptyPowerCooldowns,
   getMonsterPowerDef,
   getPowerLevel,
+  getPurchasedPowerStartQuantity,
   getUpgradedPowerStats,
+  MAX_BATTLE_POWER_SLOTS,
   PLAYER_POWERS,
 } from '../data/powers';
 import {
@@ -186,9 +188,14 @@ export class ArenaEngine {
   // Combat state
   private playerSlotPowers: (PowerId | null)[] = [null, null, null, null];
   private playerPowers: PowerId[] = [];
+  private purchasedPowers: PowerId[] = [];
   private powerUpgrades: Partial<Record<PowerId, number>> = {};
   private monsterExtraPowers: MonsterPowerId[] = [];
+  private powerActiveTimers: Record<PowerId, number> = createEmptyPowerCooldowns();
   private powerCooldowns: Record<PowerId, number> = createEmptyPowerCooldowns();
+  private powerQuantities: Record<PowerId, number> = createEmptyPowerCooldowns();
+  private matchPowerMaxQuantities: Record<PowerId, number> = createEmptyPowerCooldowns();
+  private healTickAccum = 0;
   private ultimateCharge = 0;
   private comboCount = 0;
   private comboResetTimer = 0;
@@ -226,7 +233,11 @@ export class ArenaEngine {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.12;
     this.applyQualityToRenderer();
-    this.renderer.setSize(w, h);
+    this.renderer.setSize(w, h, false);
+    this.renderer.domElement.style.display = 'block';
+    this.renderer.domElement.style.width = '100%';
+    this.renderer.domElement.style.height = '100%';
+    this.renderer.domElement.style.touchAction = 'none';
     container.appendChild(this.renderer.domElement);
 
     const pmrem = new THREE.PMREMGenerator(this.renderer);
@@ -271,6 +282,9 @@ export class ArenaEngine {
 
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
     this.resizeObserver.observe(container);
+    window.addEventListener('resize', this.onViewportResize);
+    window.addEventListener('orientationchange', this.onViewportResize);
+    window.visualViewport?.addEventListener('resize', this.onViewportResize);
     window.addEventListener('keydown', this.onKeyDown);
     window.addEventListener('keyup', this.onKeyUp);
     window.addEventListener('blur', this.onWindowBlur);
@@ -356,6 +370,17 @@ export class ArenaEngine {
 
   public setPowerUpgrades(upgrades: Partial<Record<PowerId, number>>) {
     this.powerUpgrades = { ...upgrades };
+  }
+
+  public setPurchasedPowers(powers: PowerId[]) {
+    this.purchasedPowers = powers.slice(0, Math.max(0, MAX_BATTLE_POWER_SLOTS - 5));
+    if (this.mode !== 'battle') {
+      for (const pid of this.purchasedPowers) {
+        const startQty = getPurchasedPowerStartQuantity(this.powerUpgrades, pid);
+        this.matchPowerMaxQuantities[pid] = startQty;
+        this.powerQuantities[pid] = startQty;
+      }
+    }
   }
 
   public setMode(mode: EngineMode) {
@@ -580,10 +605,21 @@ export class ArenaEngine {
     this.phaseBanner = null;
     this.phaseBannerTimer = 0;
     this.battleTime = 0;
+    this.healTickAccum = 0;
     this.lastDamageEvent = null;
     (Object.keys(this.powerCooldowns) as PowerId[]).forEach((k) => {
+      this.powerActiveTimers[k] = 0;
       this.powerCooldowns[k] = 0;
+      this.powerQuantities[k] = 0;
+      this.matchPowerMaxQuantities[k] = 0;
     });
+    this.powerQuantities.hero_surge = 1;
+    this.matchPowerMaxQuantities.hero_surge = 1;
+    for (const pid of this.purchasedPowers) {
+      const startQty = getPurchasedPowerStartQuantity(this.powerUpgrades, pid);
+      this.matchPowerMaxQuantities[pid] = startQty;
+      this.powerQuantities[pid] = startQty;
+    }
     this.vfx.clearProjectiles();
     this.emitHud();
   }
@@ -591,8 +627,12 @@ export class ArenaEngine {
   public configureMatchLoadout(
     slotPowers: (PowerId | null)[],
     monsterPowers: MonsterPowerId[],
+    purchasedPowers?: PowerId[],
   ) {
     this.playerSlotPowers = [...slotPowers];
+    if (purchasedPowers) {
+      this.purchasedPowers = purchasedPowers.slice(0, Math.max(0, MAX_BATTLE_POWER_SLOTS - 5));
+    }
     const uniqueEarned: PowerId[] = ['hero_surge'];
     for (const p of slotPowers) {
       if (p && !uniqueEarned.includes(p)) {
@@ -601,6 +641,26 @@ export class ArenaEngine {
     }
     this.playerPowers = uniqueEarned;
     this.monsterExtraPowers = monsterPowers;
+
+    (Object.keys(this.powerQuantities) as PowerId[]).forEach((k) => {
+      this.powerQuantities[k] = 0;
+      this.matchPowerMaxQuantities[k] = 0;
+    });
+    this.powerQuantities.hero_surge = 1;
+    this.matchPowerMaxQuantities.hero_surge = 1;
+    for (const p of slotPowers) {
+      if (p && p !== 'hero_surge' && p !== 'ultimate') {
+        this.matchPowerMaxQuantities[p] = 1;
+        this.powerQuantities[p] = 1;
+      }
+    }
+    for (const pid of this.purchasedPowers) {
+      if (!uniqueEarned.includes(pid)) {
+        const startQty = getPurchasedPowerStartQuantity(this.powerUpgrades, pid);
+        this.matchPowerMaxQuantities[pid] = startQty;
+        this.powerQuantities[pid] = startQty;
+      }
+    }
 
     const perEnemyBoost = monsterPowers.length * (this.enemies.length > 1 ? 0.05 : 0.08);
     const bonusMult = 1 + perEnemyBoost;
@@ -845,7 +905,32 @@ export class ArenaEngine {
     const lv = this.currentLevel.level;
     const levelScale = lv <= 10 ? 1.0 : 1 + Math.pow((lv - 10) / 120, 1.35) * 6.8;
     const rageMult = this.player.rageTimer > 0 ? 1.45 : 1.0;
-    return levelScale * rageMult;
+    const hasOffensiveOvercharge =
+      this.powerActiveTimers.fire > 0 ||
+      this.powerActiveTimers.ice > 0 ||
+      this.powerActiveTimers.lightning > 0 ||
+      this.powerActiveTimers.thunder > 0 ||
+      this.powerActiveTimers.earth > 0 ||
+      this.powerActiveTimers.super_punch > 0 ||
+      this.powerActiveTimers.energy_blast > 0 ||
+      this.powerActiveTimers.laser_blast > 0 ||
+      this.powerActiveTimers.rocket_attack > 0 ||
+      this.powerActiveTimers.plasma_cannon > 0 ||
+      this.powerActiveTimers.ground_shockwave > 0 ||
+      this.powerActiveTimers.meteor_strike > 0 ||
+      this.powerActiveTimers.ultimate_energy_blast > 0 ||
+      this.powerActiveTimers.thunder_storm > 0 ||
+      this.powerActiveTimers.mega_laser > 0 ||
+      this.powerActiveTimers.dragon_fire > 0 ||
+      this.powerActiveTimers.ice_explosion > 0 ||
+      this.powerActiveTimers.shadow_strike > 0 ||
+      this.powerActiveTimers.giant_energy_wave > 0 ||
+      this.powerActiveTimers.meteor_rain > 0 ||
+      this.powerActiveTimers.teleport_attack > 0 ||
+      this.powerActiveTimers.hero_surge > 0 ||
+      this.powerActiveTimers.ultimate > 0;
+    const overchargeMult = hasOffensiveOvercharge ? 1.15 : 1.0;
+    return levelScale * rageMult * overchargeMult;
   }
 
   private scalePlayerDamage(baseDamage: number): number {
@@ -854,14 +939,27 @@ export class ArenaEngine {
 
   public triggerPlayerPower(powerId: PowerId) {
     if (this.mode !== 'battle') return;
+    const isMcqEquipped = this.playerPowers.includes(powerId) && powerId !== 'hero_surge';
+    const isShopUnlocked = this.purchasedPowers.includes(powerId);
     if (
       powerId !== 'ultimate' &&
       powerId !== 'hero_surge' &&
-      !this.playerPowers.includes(powerId)
+      !isMcqEquipped &&
+      !isShopUnlocked
     ) {
       return;
     }
     if (this.player.hp <= 0 || this.player.state === 'defeat') return;
+
+    // Enforce active duration time limit & cooldown/reload for EVERY power without exception
+    if (this.powerActiveTimers[powerId] > 0 || this.powerCooldowns[powerId] > 0) return;
+    if (
+      powerId !== 'ultimate' &&
+      powerId !== 'hero_surge' &&
+      (this.powerQuantities[powerId] ?? 0) <= 0
+    ) {
+      return;
+    }
 
     const targetEnemy = this.getNearestLivingEnemy();
     if (!targetEnemy) return;
@@ -873,9 +971,27 @@ export class ArenaEngine {
     if (powerId === 'ultimate') {
       if (this.ultimateCharge < 100) return;
       this.ultimateCharge = 0;
+    } else if (powerId === 'hero_surge') {
+      // Power 5 stays FREE of energy cost, while still bounded by activeDuration + cooldown
+    } else {
+      // All MCQ Powers & Purchased Shop Powers enforce energy cost + quantity + active time limit + cooldown
+      if (this.player.energy < def.energyCost) return;
+      this.player.energy -= def.energyCost;
+      this.powerQuantities[powerId] = Math.max(0, (this.powerQuantities[powerId] ?? 0) - 1);
     }
-    // Note: The 5 battle powers (4 MCQ slots + 1 FREE Hero Surge) have NO cooldowns and NO energy locks!
+
+    const activeDur =
+      powerId === 'shield' ||
+      powerId === 'super_shield' ||
+      powerId === 'speed_boost' ||
+      powerId === 'rage_mode' ||
+      powerId === 'time_slow'
+        ? def.activeDuration + stats.durationBonus
+        : def.activeDuration;
+    this.powerActiveTimers[powerId] = activeDur;
     this.powerCooldowns[powerId] = 0;
+    this.emitHud();
+
     this.player.blocking = false;
     this.faceTarget(this.player, targetEnemy.runtime.pos);
     this.player.state = powerId === 'ultimate' ? 'ultimate' : 'cast_power';
@@ -1519,6 +1635,22 @@ export class ArenaEngine {
       if (this.playerSlotPowers[3]) this.triggerPlayerPower(this.playerSlotPowers[3]);
     } else if (e.code === 'Digit5' || e.code === 'KeyQ') {
       this.triggerPlayerPower('hero_surge');
+    } else if (e.code === 'Digit6' && this.purchasedPowers[0]) {
+      this.triggerPlayerPower(this.purchasedPowers[0]);
+    } else if (e.code === 'Digit7' && this.purchasedPowers[1]) {
+      this.triggerPlayerPower(this.purchasedPowers[1]);
+    } else if (e.code === 'Digit8' && this.purchasedPowers[2]) {
+      this.triggerPlayerPower(this.purchasedPowers[2]);
+    } else if (e.code === 'Digit9' && this.purchasedPowers[3]) {
+      this.triggerPlayerPower(this.purchasedPowers[3]);
+    } else if (e.code === 'Digit0' && this.purchasedPowers[4]) {
+      this.triggerPlayerPower(this.purchasedPowers[4]);
+    } else if (e.code === 'Minus' && this.purchasedPowers[5]) {
+      this.triggerPlayerPower(this.purchasedPowers[5]);
+    } else if (e.code === 'Equal' && this.purchasedPowers[6]) {
+      this.triggerPlayerPower(this.purchasedPowers[6]);
+    } else if (e.code === 'KeyR' && this.purchasedPowers[7]) {
+      this.triggerPlayerPower(this.purchasedPowers[7]);
     } else if (e.code === 'KeyU') this.triggerPlayerPower('ultimate');
   };
 
@@ -1559,12 +1691,17 @@ export class ArenaEngine {
     this.startLoop();
   };
 
+  private onViewportResize = () => {
+    this.handleResize();
+  };
+
   private handleResize() {
-    const w = Math.max(this.container.clientWidth, 320);
-    const h = Math.max(this.container.clientHeight, 240);
+    const rect = this.container.getBoundingClientRect();
+    const w = Math.max(Math.round(rect.width || this.container.clientWidth || window.innerWidth), 320);
+    const h = Math.max(Math.round(rect.height || this.container.clientHeight || window.innerHeight), 240);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
-    this.renderer.setSize(w, h);
+    this.renderer.setSize(w, h, false);
   }
 
   private startLoop() {
@@ -1692,9 +1829,28 @@ export class ArenaEngine {
   }
 
   private updateBattle(dt: number) {
-    (Object.keys(this.powerCooldowns) as PowerId[]).forEach((k) => {
-      if (this.powerCooldowns[k] > 0) {
+    let anyTimerTransition = false;
+
+    // 1. Tick active duration timers and individual cooldowns for EVERY power;
+    // when cooldown reaches zero, automatically recharge and unlock that power!
+    (Object.keys(this.powerActiveTimers) as PowerId[]).forEach((k) => {
+      if (this.powerActiveTimers[k] > 0) {
+        this.powerActiveTimers[k] = Math.max(0, this.powerActiveTimers[k] - dt);
+        if (this.powerActiveTimers[k] === 0) {
+          this.powerCooldowns[k] = PLAYER_POWERS[k].cooldown;
+          anyTimerTransition = true;
+        }
+      } else if (this.powerCooldowns[k] > 0) {
         this.powerCooldowns[k] = Math.max(0, this.powerCooldowns[k] - dt);
+        if (this.powerCooldowns[k] === 0) {
+          if (k !== 'hero_surge' && k !== 'ultimate') {
+            const maxQty = this.matchPowerMaxQuantities[k] ?? 0;
+            if (maxQty > 0) {
+              this.powerQuantities[k] = Math.min(maxQty, (this.powerQuantities[k] ?? 0) + 1);
+            }
+          }
+          anyTimerTransition = true;
+        }
       }
     });
 
@@ -1707,25 +1863,41 @@ export class ArenaEngine {
       if (this.comboChainTimer <= 0) this.playerComboStep = 0;
     }
 
-    if (this.timeSlowTimer > 0) {
-      this.timeSlowTimer = Math.max(0, this.timeSlowTimer - dt);
+    // Keep continuous buff states strictly bound to active timers so expiration deactivates them immediately
+    this.player.shieldTimer = Math.max(
+      this.powerActiveTimers.shield,
+      this.powerActiveTimers.super_shield,
+    );
+    this.player.superShieldActive = this.powerActiveTimers.super_shield > 0;
+    this.player.speedBoostTimer = this.powerActiveTimers.speed_boost;
+    this.player.rageTimer = this.powerActiveTimers.rage_mode;
+    this.timeSlowTimer = this.powerActiveTimers.time_slow;
+
+    // Nano-repair regen tick while healing_power active duration is running
+    if (this.powerActiveTimers.healing_power > 0 && this.player.hp > 0) {
+      this.healTickAccum += dt;
+      if (this.healTickAccum >= 0.5) {
+        this.healTickAccum -= 0.5;
+        if (this.player.hp < this.player.maxHp) {
+          this.player.hp = Math.min(this.player.maxHp, this.player.hp + 3);
+        }
+      }
+    } else {
+      this.healTickAccum = 0;
     }
+
     if (this.phaseBannerTimer > 0) {
       this.phaseBannerTimer -= dt;
       if (this.phaseBannerTimer <= 0) this.phaseBanner = null;
     }
 
     const energyRate =
-      (this.player.speedBoostTimer > 0 ? 15.0 : 10.5) * (this.player.rageTimer > 0 ? 1.45 : 1.0);
+      (this.player.speedBoostTimer > 0 ? 15.0 : 10.5) *
+      (this.player.rageTimer > 0 ? 1.45 : 1.0) *
+      (this.powerActiveTimers.hero_surge > 0 ? 1.2 : 1.0);
     this.player.energy = Math.min(this.player.maxEnergy, this.player.energy + dt * energyRate);
     this.ultimateCharge = Math.min(100, this.ultimateCharge + dt * 3.6);
     if (this.player.iFrames > 0) this.player.iFrames -= dt;
-    if (this.player.shieldTimer > 0) {
-      this.player.shieldTimer -= dt;
-      if (this.player.shieldTimer <= 0) this.player.superShieldActive = false;
-    }
-    if (this.player.speedBoostTimer > 0) this.player.speedBoostTimer -= dt;
-    if (this.player.rageTimer > 0) this.player.rageTimer -= dt;
     if (this.player.stunTimer > 0) this.player.stunTimer -= dt;
 
     this.updatePlayerCombat(dt);
@@ -1802,13 +1974,19 @@ export class ArenaEngine {
     }
 
     this.resolveProjectiles();
+    if (anyTimerTransition) {
+      this.emitHud();
+    }
   }
 
   private updatePlayerCombat(dt: number) {
     const p = this.player;
     p.stateTimer += dt;
     const nearest = this.getNearestLivingEnemy();
-    const boostMult = (p.speedBoostTimer > 0 ? 1.48 : 1.0) * (p.rageTimer > 0 ? 1.25 : 1.0);
+    const boostMult =
+      (p.speedBoostTimer > 0 ? 1.48 : 1.0) *
+      (p.rageTimer > 0 ? 1.25 : 1.0) *
+      (this.powerActiveTimers.wind > 0 ? 1.2 : 1.0);
     const speed = (p.blocking ? 2.8 : 7.4) * boostMult;
 
     if (p.state === 'attack_normal' || p.state === 'attack_kick' || p.state === 'attack_heavy') {
@@ -1854,7 +2032,7 @@ export class ArenaEngine {
       }
 
       if (p.stateTimer >= p.stateDuration) {
-        p.state = 'idle';
+        p.state = p.pos.y > 0.08 ? 'jump' : 'idle';
         if (this.bufferedAttack) {
           this.bufferedAttack = false;
           this.triggerPlayerAction('attack');
@@ -1874,7 +2052,7 @@ export class ArenaEngine {
         p.vel.z = THREE.MathUtils.lerp(p.vel.z, _moveWorld.z * castSpeed, 1 - Math.exp(-12 * dt));
       }
       if (p.stateTimer >= p.stateDuration) {
-        p.state = 'idle';
+        p.state = p.pos.y > 0.08 ? 'jump' : 'idle';
       } else {
         return;
       }
@@ -1883,7 +2061,7 @@ export class ArenaEngine {
     if (p.state === 'dodge' || p.state === 'ultimate' || p.state === 'hitstun') {
       if (p.stateTimer >= p.stateDuration) {
         const wasDodge = p.state === 'dodge';
-        p.state = 'idle';
+        p.state = p.pos.y > 0.08 ? 'jump' : 'idle';
         if (wasDodge && this.bufferedAttack) {
           this.bufferedAttack = false;
           this.triggerPlayerAction('attack');
@@ -2522,6 +2700,10 @@ export class ArenaEngine {
 
     let dmg = rawAmount;
     const blocked = !unblockable && this.player.blocking;
+    if (this.player.shieldTimer <= 0 && (this.powerActiveTimers.earth > 0 || this.powerActiveTimers.ground_shockwave > 0)) {
+      dmg = Math.max(1, Math.round(dmg * 0.8));
+    }
+
     if (blocked) {
       dmg = Math.max(1, Math.round(dmg * 0.25));
       soundEngine.playBlock();
@@ -2641,12 +2823,14 @@ export class ArenaEngine {
       const sideX = -_v1.z;
       const sideZ = _v1.x;
 
+      const camY = 4.6 + maxSep * 0.16 + (living.length > 1 ? 0.8 : 0);
+      const lookY = 1.35;
       _camDesiredPos.set(
         midX + sideX * camDist,
-        4.6 + maxSep * 0.16 + (living.length > 1 ? 0.8 : 0),
+        camY,
         midZ + sideZ * camDist,
       );
-      _camDesiredLook.set(midX, 1.35, midZ);
+      _camDesiredLook.set(midX, lookY, midZ);
     }
 
     const dampAlpha = 1 - Math.exp(-6.5 * dt);
@@ -2729,7 +2913,9 @@ export class ArenaEngine {
       survivalTotalWaves: Math.max(1, this.survivalWaveQueue.length),
       phaseBanner: this.phaseBanner,
       enemies: enemyStates,
+      powerActiveTimers: { ...this.powerActiveTimers },
       powerCooldowns: { ...this.powerCooldowns },
+      powerQuantities: { ...this.powerQuantities },
       comboCount: this.comboCount,
       lastDamageEvent: this.lastDamageEvent,
       battleTime: this.battleTime,
@@ -2741,6 +2927,9 @@ export class ArenaEngine {
     cancelAnimationFrame(this.frameId);
     clearTimeout(this.frameId);
     this.resizeObserver.disconnect();
+    window.removeEventListener('resize', this.onViewportResize);
+    window.removeEventListener('orientationchange', this.onViewportResize);
+    window.visualViewport?.removeEventListener('resize', this.onViewportResize);
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
     window.removeEventListener('blur', this.onWindowBlur);

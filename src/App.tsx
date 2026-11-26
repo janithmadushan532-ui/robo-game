@@ -11,8 +11,16 @@ import { MainMenu } from './components/MainMenu';
 import { McqDraftOverlay } from './components/McqDraftOverlay';
 import { ResultOverlay } from './components/ResultOverlay';
 import { BOSS_LEVELS, getLevelDef } from './data/levels';
-import { pickMcqsForUnit } from './data/mcqDatabase';
-import { createEmptyPowerCooldowns, getMonsterPowerDef, PLAYER_POWER_LIST } from './data/powers';
+import { pickMcqsForUnitSequential } from './data/mcqDatabase';
+import {
+  computeBattleExtraPowers,
+  createEmptyPowerCooldowns,
+  getMonsterPowerDef,
+  MAX_LOADOUT_SELECTION,
+  MAX_POWER_LEVEL,
+  PLAYER_POWER_LIST,
+  SHOP_POWER_ID_SET,
+} from './data/powers';
 import { GRADE_10_SCIENCE_UNITS } from './data/scienceUnits';
 import { ArenaEngine } from './game/ArenaEngine';
 import { soundEngine } from './game/audio';
@@ -60,15 +68,17 @@ const INITIAL_HUD: BattleHudSnapshot = {
   survivalTotalWaves: 1,
   phaseBanner: null,
   enemies: [],
+  powerActiveTimers: createEmptyPowerCooldowns(),
   powerCooldowns: createEmptyPowerCooldowns(),
+  powerQuantities: createEmptyPowerCooldowns(),
   comboCount: 0,
   lastDamageEvent: null,
   battleTime: 0,
 };
 
-// Active combat powers eligible for Pre-Battle MCQ Slots 1-4 (Ultimate and Free Surge stay outside MCQ rewards)
+// Active combat powers eligible for Pre-Battle MCQ Slots 1-4 (Ultimate, Free Surge, and exclusive Shop powers stay outside MCQ rewards)
 const DRAFTABLE_PLAYER_POWERS = PLAYER_POWER_LIST.filter(
-  (p) => p.id !== 'ultimate' && p.id !== 'hero_surge',
+  (p) => p.id !== 'ultimate' && p.id !== 'hero_surge' && !SHOP_POWER_ID_SET.has(p.id),
 );
 
 const detectTouchMobile = (): boolean => {
@@ -77,6 +87,24 @@ const detectTouchMobile = (): boolean => {
     Boolean(window.matchMedia?.('(pointer: coarse)').matches) ||
     ('ontouchstart' in window && Math.min(window.innerWidth, window.innerHeight) < 900)
   );
+};
+
+const tryEnterImmersiveMode = () => {
+  try {
+    const docEl = document.documentElement as HTMLElement & {
+      webkitRequestFullscreen?: () => Promise<void> | void;
+    };
+    if (!document.fullscreenElement) {
+      if (typeof docEl.requestFullscreen === 'function') {
+        docEl.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+      } else if (typeof docEl.webkitRequestFullscreen === 'function') {
+        docEl.webkitRequestFullscreen();
+      }
+    }
+  } catch {
+    // AppMaker Android WebView handles native fullscreen outside browser fullscreen API
+  }
+  tryLockLandscape();
 };
 
 const tryLockLandscape = () => {
@@ -153,6 +181,8 @@ export default function App() {
   const [lastAwardedPlayerPower, setLastAwardedPlayerPower] = useState<PowerId | null>(null);
   const [lastAwardedMonsterPower, setLastAwardedMonsterPower] = useState<MonsterPowerId | null>(null);
 
+  const [lastMatchCoinsEarned, setLastMatchCoinsEarned] = useState(0);
+
   const [hud, setHud] = useState<BattleHudSnapshot>(INITIAL_HUD);
   const [isTouchMobile, setIsTouchMobile] = useState<boolean>(() => detectTouchMobile());
   const [isPortrait, setIsPortrait] = useState<boolean>(() =>
@@ -166,14 +196,32 @@ export default function App() {
   mcqSummaryRef.current = mcqSummary;
   const collectedPowersRef = useRef(progress.collectedPowers);
   collectedPowersRef.current = progress.collectedPowers;
+  const purchasedPowersRef = useRef(progress.purchasedPowers);
+  purchasedPowersRef.current = progress.purchasedPowers;
+  const activeLoadoutRef = useRef(progress.activeLoadout);
+  activeLoadoutRef.current = progress.activeLoadout;
+  const unitQuestionCursorsRef = useRef(progress.unitQuestionCursors);
+  unitQuestionCursorsRef.current = progress.unitQuestionCursors;
   const screenRef = useRef(screen);
   screenRef.current = screen;
   const pausedByRotationRef = useRef(false);
+
+  const battleExtraPowers = computeBattleExtraPowers(
+    progress.activeLoadout,
+    progress.purchasedPowers,
+    mcqSummary.slotPowers,
+  );
 
   // Sync audio settings
   useEffect(() => {
     soundEngine.setSettings(progress.settings.soundEnabled, progress.settings.musicEnabled);
   }, [progress.settings.soundEnabled, progress.settings.musicEnabled]);
+
+  // Sync active battle loadout extras and power upgrades into ArenaEngine
+  useEffect(() => {
+    engineRef.current?.setPurchasedPowers(battleExtraPowers);
+    engineRef.current?.setPowerUpgrades(progress.powerUpgrades);
+  }, [battleExtraPowers, progress.powerUpgrades]);
 
   // Persist progress changes
   useEffect(() => {
@@ -198,11 +246,13 @@ export default function App() {
     tryLockLandscape();
     window.addEventListener('resize', syncViewport);
     window.addEventListener('orientationchange', handleOrientationChange);
+    window.visualViewport?.addEventListener('resize', syncViewport);
 
     return () => {
       window.clearTimeout(timeoutId);
       window.removeEventListener('resize', syncViewport);
       window.removeEventListener('orientationchange', handleOrientationChange);
+      window.visualViewport?.removeEventListener('resize', syncViewport);
     };
   }, []);
 
@@ -236,9 +286,11 @@ export default function App() {
           setScreen('battle');
         },
         onBattleEnd: (winner) => {
+          const lvlDef = getLevelDef(currentLevelRef.current);
+          const sum = mcqSummaryRef.current;
           if (winner === 'player') {
-            const lvlDef = getLevelDef(currentLevelRef.current);
-            const sum = mcqSummaryRef.current;
+            const coinsEarned = lvlDef.rewardCoins + sum.correct * 40;
+            setLastMatchCoinsEarned(coinsEarned);
             setProgress((prev) => {
               const nextUnlocked = Math.min(
                 BOSS_LEVELS.length,
@@ -257,12 +309,23 @@ export default function App() {
                 highestUnlockedLevel: nextUnlocked,
                 defeatedBossIds: defeated,
                 collectedPowers: collectedPowersRef.current,
+                coins: prev.coins + coinsEarned,
                 totalWins: prev.totalWins + 1,
-                totalScore: prev.totalScore + lvlDef.rewardCoins + sum.correct * 40,
+                totalScore: prev.totalScore + coinsEarned,
               };
             });
             setScreen('victory');
           } else {
+            const coinsEarned = Math.max(
+              25,
+              Math.round(lvlDef.rewardCoins * 0.25) + sum.correct * 20,
+            );
+            setLastMatchCoinsEarned(coinsEarned);
+            setProgress((prev) => ({
+              ...prev,
+              coins: prev.coins + coinsEarned,
+              totalScore: prev.totalScore + coinsEarned,
+            }));
             setScreen('defeat');
           }
         },
@@ -270,6 +333,14 @@ export default function App() {
       progress.settings.graphicsQuality,
     );
 
+    engine.setPurchasedPowers(
+      computeBattleExtraPowers(
+        progress.activeLoadout,
+        progress.purchasedPowers,
+        mcqSummary.slotPowers,
+      ),
+    );
+    engine.setPowerUpgrades(progress.powerUpgrades);
     engineRef.current = engine;
 
     const handleEsc = (e: KeyboardEvent) => {
@@ -296,19 +367,20 @@ export default function App() {
   const startLevelFlow = useCallback(
     (levelNum: number) => {
       const clampedLevel = Math.max(1, Math.min(BOSS_LEVELS.length, levelNum));
-      tryLockLandscape();
+      tryEnterImmersiveMode();
       soundEngine.unlockAndStartMusic();
       soundEngine.playUiClick();
 
-      const { questions, updatedUsedIds } = pickMcqsForUnit(
+      const { questions, updatedCursors } = pickMcqsForUnitSequential(
         progress.selectedUnitId,
-        progress.usedQuestionIds,
+        unitQuestionCursorsRef.current,
         4,
       );
+      unitQuestionCursorsRef.current = updatedCursors;
 
       setProgress((prev) => ({
         ...prev,
-        usedQuestionIds: updatedUsedIds,
+        unitQuestionCursors: updatedCursors,
       }));
 
       const emptySummary: LevelMcqSummary = {
@@ -321,6 +393,7 @@ export default function App() {
       };
       mcqSummaryRef.current = emptySummary;
 
+      setLastMatchCoinsEarned(0);
       setCurrentLevelNum(clampedLevel);
       setLevelQuestions(questions);
       setMcqIndex(0);
@@ -332,7 +405,7 @@ export default function App() {
 
       engineRef.current?.loadLevelScene(clampedLevel, 'mcq_draft');
     },
-    [progress.selectedUnitId, progress.usedQuestionIds],
+    [progress.selectedUnitId],
   );
 
   const handleMcqAnswer = useCallback(
@@ -351,18 +424,22 @@ export default function App() {
       if (isCorrect) {
         soundEngine.playMcqCorrect();
 
-        // Pick a DISTINCT active power for this slot that has not been awarded in previous slots or given to enemy
+        // Pick a DISTINCT active power for this slot that has not been awarded in previous slots, purchased, or given to enemy
         const unownedDistinct = DRAFTABLE_PLAYER_POWERS.filter(
           (p) =>
             !collectedPowersRef.current.includes(p.id) &&
+            !purchasedPowersRef.current.includes(p.id) &&
             !playerEarnedSet.has(p.id) &&
             !monsterEarnedSet.has(p.id),
         );
         const unAwardedDistinct = DRAFTABLE_PLAYER_POWERS.filter(
-          (p) => !playerEarnedSet.has(p.id) && !monsterEarnedSet.has(p.id),
+          (p) =>
+            !purchasedPowersRef.current.includes(p.id) &&
+            !playerEarnedSet.has(p.id) &&
+            !monsterEarnedSet.has(p.id),
         );
         const fallbackDistinct = DRAFTABLE_PLAYER_POWERS.filter(
-          (p) => !playerEarnedSet.has(p.id),
+          (p) => !purchasedPowersRef.current.includes(p.id) && !playerEarnedSet.has(p.id),
         );
 
         const candidates =
@@ -385,13 +462,16 @@ export default function App() {
           collectedPowersRef.current = [...collectedPowersRef.current, chosenPower];
         }
 
-        setProgress((prev) => ({
-          ...prev,
-          collectedPowers: prev.collectedPowers.includes(chosenPower)
+        setProgress((prev) => {
+          const nextCollected = prev.collectedPowers.includes(chosenPower)
             ? prev.collectedPowers
-            : [...prev.collectedPowers, chosenPower],
-          totalCorrectMcq: prev.totalCorrectMcq + 1,
-        }));
+            : [...prev.collectedPowers, chosenPower];
+          return {
+            ...prev,
+            collectedPowers: nextCollected,
+            totalCorrectMcq: prev.totalCorrectMcq + 1,
+          };
+        });
 
         const nextSlotPowers = [...curSummary.slotPowers];
         nextSlotPowers[mcqIndex] = chosenPower;
@@ -459,12 +539,111 @@ export default function App() {
 
       const engine = engineRef.current;
       if (engine) {
-        engine.configureMatchLoadout(sum.slotPowers, sum.monsterPowersEarned);
+        const matchExtras = computeBattleExtraPowers(
+          activeLoadoutRef.current,
+          purchasedPowersRef.current,
+          sum.slotPowers,
+        );
+        engine.configureMatchLoadout(
+          sum.slotPowers,
+          sum.monsterPowersEarned,
+          matchExtras,
+        );
         engine.setMode('boss_intro');
       }
       setScreen('boss_intro');
     }
   }, [mcqIndex, levelQuestions.length]);
+
+  const handlePurchasePower = useCallback((powerId: PowerId, price: number) => {
+    setProgress((prev) => {
+      if (prev.purchasedPowers.includes(powerId) || prev.coins < price) {
+        return prev;
+      }
+      soundEngine.playMcqCorrect();
+      const nextPurchased = [...prev.purchasedPowers, powerId];
+      const nextCollected = prev.collectedPowers.includes(powerId)
+        ? prev.collectedPowers
+        : [...prev.collectedPowers, powerId];
+      const nextLoadout =
+        !prev.activeLoadout.includes(powerId) &&
+        prev.activeLoadout.length < MAX_LOADOUT_SELECTION
+          ? [...prev.activeLoadout, powerId]
+          : prev.activeLoadout;
+      purchasedPowersRef.current = nextPurchased;
+      collectedPowersRef.current = nextCollected;
+      activeLoadoutRef.current = nextLoadout;
+      return {
+        ...prev,
+        coins: prev.coins - price,
+        purchasedPowers: nextPurchased,
+        collectedPowers: nextCollected,
+        activeLoadout: nextLoadout,
+      };
+    });
+  }, []);
+
+  const handleToggleLoadoutPower = useCallback((powerId: PowerId) => {
+    soundEngine.playUiClick();
+    setProgress((prev) => {
+      if (!prev.purchasedPowers.includes(powerId)) {
+        return prev;
+      }
+      const exists = prev.activeLoadout.includes(powerId);
+      if (exists) {
+        const nextLoadout = prev.activeLoadout.filter((id) => id !== powerId);
+        activeLoadoutRef.current = nextLoadout;
+        return { ...prev, activeLoadout: nextLoadout };
+      }
+      if (prev.activeLoadout.length >= MAX_LOADOUT_SELECTION) {
+        return prev;
+      }
+      const nextLoadout = [...prev.activeLoadout, powerId];
+      activeLoadoutRef.current = nextLoadout;
+      return { ...prev, activeLoadout: nextLoadout };
+    });
+  }, []);
+
+  const handleAutoFillLoadout = useCallback(() => {
+    soundEngine.playUiClick();
+    setProgress((prev) => {
+      const nextLoadout = [...prev.activeLoadout].filter((id) =>
+        prev.purchasedPowers.includes(id),
+      );
+      for (const pid of prev.purchasedPowers) {
+        if (nextLoadout.length >= MAX_LOADOUT_SELECTION) break;
+        if (!nextLoadout.includes(pid)) {
+          nextLoadout.push(pid);
+        }
+      }
+      activeLoadoutRef.current = nextLoadout;
+      return { ...prev, activeLoadout: nextLoadout };
+    });
+  }, []);
+
+  const handleClearLoadout = useCallback(() => {
+    soundEngine.playUiClick();
+    activeLoadoutRef.current = [];
+    setProgress((prev) => ({ ...prev, activeLoadout: [] }));
+  }, []);
+
+  const handleUpgradePower = useCallback((powerId: PowerId, cost: number) => {
+    setProgress((prev) => {
+      const currentLevel = prev.powerUpgrades[powerId] ?? 1;
+      if (currentLevel >= MAX_POWER_LEVEL || prev.coins < cost) {
+        return prev;
+      }
+      soundEngine.playMcqCorrect();
+      return {
+        ...prev,
+        coins: prev.coins - cost,
+        powerUpgrades: {
+          ...prev.powerUpgrades,
+          [powerId]: currentLevel + 1,
+        },
+      };
+    });
+  }, []);
 
   const handleToggleSound = () => {
     soundEngine.unlockAndStartMusic();
@@ -516,7 +695,7 @@ export default function App() {
   const levelDef = getLevelDef(currentLevelNum);
 
   return (
-    <div className="relative h-dvh w-dvw select-none overflow-hidden bg-[#07090f]">
+    <div className="fixed inset-0 h-dvh w-screen select-none overflow-hidden bg-[#07090f]">
       {/* Isolated WebGL Mount Container */}
       <div ref={canvasMountRef} className="absolute inset-0 h-full w-full" />
 
@@ -529,7 +708,7 @@ export default function App() {
           onPlayNew={() => startLevelFlow(1)}
           onContinue={() => startLevelFlow(progress.highestUnlockedLevel)}
           onOpenModal={(m) => {
-            tryLockLandscape();
+            tryEnterImmersiveMode();
             soundEngine.unlockAndStartMusic();
             soundEngine.playUiClick();
             setActiveModal(m);
@@ -562,6 +741,7 @@ export default function App() {
           hud={hud}
           levelDef={levelDef}
           matchSlotPowers={mcqSummary.slotPowers}
+          purchasedPowers={battleExtraPowers}
           bossBonusPowers={mcqSummary.monsterPowersEarned}
           soundEnabled={progress.settings.soundEnabled}
           showTouchMode={progress.settings.showTouchControls}
@@ -586,6 +766,8 @@ export default function App() {
           screen={screen}
           levelDef={levelDef}
           mcqSummary={mcqSummary}
+          coinsEarned={lastMatchCoinsEarned}
+          totalCoins={progress.coins}
           onResume={() => {
             engineRef.current?.setMode('battle');
             setScreen('battle');
@@ -601,17 +783,31 @@ export default function App() {
         activeModal={activeModal}
         progress={progress}
         onClose={() => setActiveModal('none')}
+        onSwitchModal={(m) => {
+          soundEngine.playUiClick();
+          setActiveModal(m);
+        }}
         onStartLevel={(lvl) => startLevelFlow(lvl)}
         onSelectUnit={(unitId) => {
           soundEngine.playUiClick();
           setProgress((prev) => ({ ...prev, selectedUnitId: unitId }));
         }}
+        onPurchasePower={handlePurchasePower}
+        onUpgradePower={handleUpgradePower}
+        onToggleLoadoutPower={handleToggleLoadoutPower}
+        onAutoFillLoadout={handleAutoFillLoadout}
+        onClearLoadout={handleClearLoadout}
         onUpdateSettings={handleUpdateSettings}
         onResetProgress={() => {
           const fresh = resetProgress();
           collectedPowersRef.current = fresh.collectedPowers;
+          purchasedPowersRef.current = fresh.purchasedPowers;
+          activeLoadoutRef.current = fresh.activeLoadout;
+          unitQuestionCursorsRef.current = fresh.unitQuestionCursors;
           setProgress(fresh);
           setCurrentLevelNum(1);
+          engineRef.current?.setPurchasedPowers(fresh.activeLoadout);
+          engineRef.current?.setPowerUpgrades(fresh.powerUpgrades);
           engineRef.current?.loadLevelScene(1, 'menu');
         }}
       />
@@ -631,12 +827,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => {
-                try {
-                  document.documentElement.requestFullscreen?.().catch(() => {});
-                } catch {
-                  // Ignore fullscreen rejection
-                }
-                tryLockLandscape();
+                tryEnterImmersiveMode();
               }}
               className="mt-5 rounded-xl border border-sky-300/60 bg-sky-500 px-5 py-2.5 font-display text-xs font-black tracking-wider text-slate-950 shadow-lg active:scale-95"
             >

@@ -1,30 +1,54 @@
 import React, { useState } from 'react';
 import {
+  ArrowUpCircle,
   BookOpen,
   Check,
   CheckCircle2,
+  Coins,
   Crown,
   Flame,
+  Layers,
   Lock,
   Play,
   Settings as SettingsIcon,
+  ShoppingBag,
   Skull,
   Swords,
   Trash2,
   X,
 } from 'lucide-react';
 import { BOSS_LEVELS } from '../data/levels';
-import { getMonsterPowerDef, PLAYER_POWER_LIST } from '../data/powers';
+import { getUnitMcqs } from '../data/mcqDatabase';
+import {
+  getMonsterPowerDef,
+  getOwnedInventoryPowers,
+  getPowerLevel,
+  getPowerUpgradeCost,
+  getPurchasedPowerStartQuantity,
+  MAX_BATTLE_POWER_SLOTS,
+  MAX_LOADOUT_SELECTION,
+  MAX_POWER_LEVEL,
+  PLAYER_POWER_LIST,
+  PLAYER_POWERS,
+  SHOP_POWER_CATALOG,
+  SHOP_POWER_ID_SET,
+} from '../data/powers';
 import { GRADE_10_SCIENCE_UNITS } from '../data/scienceUnits';
-import { ActiveModal, GraphicsQuality, MonsterCategory, SavedProgress } from '../types/game';
+import { ActiveModal, GraphicsQuality, MonsterCategory, PowerId, SavedProgress } from '../types/game';
 import { PowerIcon } from './PowerIcon';
 
 interface CollectionModalsProps {
   activeModal: ActiveModal;
   progress: SavedProgress;
   onClose: () => void;
+  onSwitchModal: (modal: ActiveModal) => void;
   onStartLevel: (level: number) => void;
   onSelectUnit: (unitId: number) => void;
+  onPurchasePower: (powerId: PowerId, price: number) => void;
+  onUpgradePower: (powerId: PowerId, cost: number) => void;
+  onToggleLoadoutPower: (powerId: PowerId) => void;
+  onAutoFillLoadout: () => void;
+  onClearLoadout: () => void;
   onUpdateSettings: (patch: Partial<SavedProgress['settings']>) => void;
   onResetProgress: () => void;
 }
@@ -59,8 +83,14 @@ export const CollectionModals: React.FC<CollectionModalsProps> = ({
   activeModal,
   progress,
   onClose,
+  onSwitchModal,
   onStartLevel,
   onSelectUnit,
+  onPurchasePower,
+  onUpgradePower,
+  onToggleLoadoutPower,
+  onAutoFillLoadout,
+  onClearLoadout,
   onUpdateSettings,
   onResetProgress,
 }) => {
@@ -77,8 +107,18 @@ export const CollectionModals: React.FC<CollectionModalsProps> = ({
     },
     powers: {
       title: 'POWER COLLECTION',
-      sub: `Answer Pre-Battle Science MCQs correctly to unlock & master all ${PLAYER_POWER_LIST.length} Combat Powers`,
+      sub: `Answer Pre-Battle Science MCQs or visit the Power Shop to permanently unlock all ${PLAYER_POWER_LIST.length} Powers`,
       icon: <Flame className="h-5 w-5 text-amber-400" />,
+    },
+    shop: {
+      title: 'POWER SHOP · SPECIAL ARSENAL',
+      sub: 'Earn Coins by completing matches — Purchase Special Powers once to permanently unlock them in every future match!',
+      icon: <ShoppingBag className="h-5 w-5 text-amber-400" />,
+    },
+    loadout: {
+      title: `PURCHASED POWER LOADOUT (MAX ${MAX_LOADOUT_SELECTION} SLOTS)`,
+      sub: `Equip up to ${MAX_LOADOUT_SELECTION} Purchased Shop Powers alongside your 4 MCQ Rewards + Free Surge (${MAX_BATTLE_POWER_SLOTS} slots max). All owned powers stay permanently saved.`,
+      icon: <Layers className="h-5 w-5 text-cyan-400" />,
     },
     monsters: {
       title: 'MONSTER & ROBOT BESTIARY',
@@ -87,7 +127,7 @@ export const CollectionModals: React.FC<CollectionModalsProps> = ({
     },
     units: {
       title: 'GRADE 10 SCIENCE UNITS',
-      sub: 'Sri Lankan Grade 10 Syllabus — All MCQs come strictly from your selected Unit',
+      sub: 'Sri Lankan Grade 10 Syllabus — Sequential MCQs come strictly from your selected Unit without repeating until all are used',
       icon: <BookOpen className="h-5 w-5 text-emerald-400" />,
     },
     settings: {
@@ -102,10 +142,18 @@ export const CollectionModals: React.FC<CollectionModalsProps> = ({
     sectorFilter === 'all' ? BOSS_LEVELS : BOSS_LEVELS.filter((l) => l.sector === sectorFilter);
 
   return (
-    <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/84 p-3 sm:p-6">
-      <div className="flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-2xl">
+    <div
+      className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/84 p-3 sm:p-6"
+      style={{
+        paddingTop: 'max(12px, env(safe-area-inset-top, 0px))',
+        paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))',
+        paddingLeft: 'max(12px, env(safe-area-inset-left, 0px))',
+        paddingRight: 'max(12px, env(safe-area-inset-right, 0px))',
+      }}
+    >
+      <div className="flex max-h-[90dvh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-2xl">
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3.5">
+        <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-5 py-3.5">
           <div className="flex items-center gap-3">
             {meta.icon}
             <div>
@@ -115,16 +163,22 @@ export const CollectionModals: React.FC<CollectionModalsProps> = ({
               <p className="text-xs text-slate-400">{meta.sub}</p>
             </div>
           </div>
-          <button
-            onClick={() => {
-              setConfirmReset(false);
-              onClose();
-            }}
-            aria-label="Close Modal"
-            className="rounded-lg border border-slate-700 bg-slate-900 p-2 text-slate-300 hover:border-rose-400 hover:text-white"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 rounded-lg border border-amber-400/50 bg-amber-950/75 px-3 py-1.5 font-display text-xs font-black tabular-nums text-amber-300">
+              <Coins className="h-3.5 w-3.5 text-amber-400" />
+              <span>{progress.coins.toLocaleString()}</span>
+            </div>
+            <button
+              onClick={() => {
+                setConfirmReset(false);
+                onClose();
+              }}
+              aria-label="Close Modal"
+              className="rounded-lg border border-slate-700 bg-slate-900 p-2 text-slate-300 hover:border-rose-400 hover:text-white"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
 
         {/* Sector Filter Tabs (I–V) for Levels & Monsters */}
@@ -364,11 +418,369 @@ export const CollectionModals: React.FC<CollectionModalsProps> = ({
             </div>
           )}
 
+          {activeModal === 'shop' && (
+            <div className="flex flex-col gap-4">
+              {/* Coin & Unlock Banner */}
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/40 bg-gradient-to-r from-amber-950/60 via-slate-900 to-slate-950 p-4">
+                <div>
+                  <div className="font-display text-xs font-extrabold tracking-wider text-amber-400">
+                    PERMANENT SPECIAL POWER UNLOCKS
+                  </div>
+                  <p className="mt-0.5 text-xs text-slate-300">
+                    Purchased powers stay unlocked forever and are automatically available in every future match alongside your 4 MCQ Powers + FREE Surge.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => onSwitchModal('loadout')}
+                    className="flex items-center gap-1.5 rounded-lg border border-cyan-400/60 bg-cyan-950/70 px-3 py-1.5 font-display text-[11px] font-black text-cyan-200 transition hover:bg-cyan-900/70"
+                  >
+                    <Layers className="h-3.5 w-3.5 text-cyan-300" />
+                    <span>LOADOUT ({progress.activeLoadout.length}/{MAX_LOADOUT_SELECTION})</span>
+                  </button>
+                  <div className="rounded-lg border border-slate-700 bg-slate-950/90 px-3 py-1.5 text-right">
+                    <div className="text-[10px] font-bold text-slate-400">UNLOCKED</div>
+                    <div className="font-display text-sm font-black tabular-nums text-emerald-400">
+                      {progress.purchasedPowers.length} / {SHOP_POWER_CATALOG.length}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-amber-400/60 bg-slate-950/90 px-3 py-1.5 text-right">
+                    <div className="text-[10px] font-bold text-amber-400">YOUR COINS</div>
+                    <div className="font-display text-sm font-black tabular-nums text-white">
+                      {progress.coins.toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Shop Power Cards */}
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {SHOP_POWER_CATALOG.map((item) => {
+                  const pwr = PLAYER_POWERS[item.powerId];
+                  const isOwned = progress.purchasedPowers.includes(item.powerId);
+                  const canAfford = progress.coins >= item.price;
+                  const pwrLevel = getPowerLevel(progress.powerUpgrades, item.powerId);
+                  const upgradeCost = getPowerUpgradeCost(item.powerId, pwrLevel);
+                  const canUpgrade = isOwned && pwrLevel < MAX_POWER_LEVEL && progress.coins >= upgradeCost;
+
+                  return (
+                    <div
+                      key={item.powerId}
+                      data-testid={`shop-item-${item.powerId}`}
+                      className={`flex flex-col justify-between rounded-xl border p-4 transition ${
+                        isOwned
+                          ? 'border-emerald-500/55 bg-slate-900/95'
+                          : canAfford
+                          ? 'border-amber-400/55 bg-slate-900/95 hover:border-amber-300'
+                          : 'border-slate-800 bg-slate-950/85'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-3">
+                            <div
+                              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-slate-950 shadow-lg"
+                              style={{ backgroundColor: pwr.color }}
+                            >
+                              <PowerIcon type={pwr.icon} className="h-6 w-6" />
+                            </div>
+                            <div>
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="font-display text-sm font-black text-white">
+                                  {pwr.name}
+                                </span>
+                                <span
+                                  className={`rounded px-1.5 py-0.5 font-display text-[9px] font-black ${
+                                    item.tier === 'LEGENDARY'
+                                      ? 'bg-rose-600/80 text-white'
+                                      : item.tier === 'ELITE'
+                                      ? 'bg-purple-600/80 text-white'
+                                      : 'bg-sky-600/80 text-white'
+                                  }`}
+                                >
+                                  {item.tier}
+                                </span>
+                              </div>
+                              <div className="font-sinhala text-xs font-semibold text-sky-300">
+                                {pwr.sinhalaName}
+                              </div>
+                            </div>
+                          </div>
+
+                          {isOwned ? (
+                            <span className="flex items-center gap-1 rounded bg-emerald-500/20 px-2 py-0.5 font-display text-[10px] font-black text-emerald-300">
+                              <CheckCircle2 className="h-3 w-3" /> OWNED Lv.{pwrLevel}
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1 rounded bg-amber-500/20 px-2 py-0.5 font-display text-[11px] font-black tabular-nums text-amber-300">
+                              <Coins className="h-3 w-3" /> {item.price.toLocaleString()}
+                            </span>
+                          )}
+                        </div>
+
+                        <p className="mt-2.5 text-xs leading-relaxed text-slate-300">
+                          {pwr.description}
+                        </p>
+
+                        <div className="mt-2.5 flex flex-wrap gap-2 border-t border-slate-800 pt-2 text-[11px] font-bold">
+                          <span className="text-rose-400">DMG: {pwr.damage}</span>
+                          <span className="text-amber-400">EN: {pwr.energyCost}</span>
+                          <span className="text-cyan-300">TIME: {pwr.activeDuration}s</span>
+                          <span className="text-sky-400">CD: {pwr.cooldown}s</span>
+                          <span className="text-emerald-400">{pwr.effectNote}</span>
+                        </div>
+                      </div>
+
+                      <div className="mt-3">
+                        {isOwned ? (
+                          <div className="flex items-center gap-2">
+                            <div className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-950/60 px-3 py-2 font-display text-[11px] font-black text-emerald-300">
+                              <Check className="h-3.5 w-3.5" />
+                              <span>PERMANENTLY UNLOCKED</span>
+                            </div>
+                            {pwrLevel < MAX_POWER_LEVEL && (
+                              <button
+                                type="button"
+                                disabled={!canUpgrade}
+                                onClick={() => onUpgradePower(item.powerId, upgradeCost)}
+                                className={`flex items-center gap-1 rounded-lg px-3 py-2 font-display text-[11px] font-black transition ${
+                                  canUpgrade
+                                    ? 'bg-sky-600 text-white hover:bg-sky-500 active:scale-95'
+                                    : 'cursor-not-allowed bg-slate-800 text-slate-500'
+                                }`}
+                              >
+                                <ArrowUpCircle className="h-3.5 w-3.5" />
+                                <span>UPG ({upgradeCost})</span>
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            data-testid={`buy-power-${item.powerId}`}
+                            disabled={!canAfford}
+                            onClick={() => onPurchasePower(item.powerId, item.price)}
+                            className={`flex w-full items-center justify-center gap-2 rounded-lg px-3 py-2.5 font-display text-xs font-black transition ${
+                              canAfford
+                                ? 'bg-amber-500 text-slate-950 shadow-lg hover:bg-amber-400 active:scale-[0.98]'
+                                : 'cursor-not-allowed border border-slate-800 bg-slate-900 text-slate-500'
+                            }`}
+                          >
+                            {canAfford ? (
+                              <>
+                                <ShoppingBag className="h-4 w-4" />
+                                <span>PURCHASE PERMANENTLY · {item.price.toLocaleString()} COINS</span>
+                              </>
+                            ) : (
+                              <>
+                                <Lock className="h-3.5 w-3.5" />
+                                <span>NEED {(item.price - progress.coins).toLocaleString()} MORE COINS</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {activeModal === 'loadout' && (() => {
+            const equippedPurchased = progress.activeLoadout.filter((pid) =>
+              progress.purchasedPowers.includes(pid),
+            );
+            const mcqCollected = getOwnedInventoryPowers([], progress.collectedPowers).filter(
+              (pid) => !progress.purchasedPowers.includes(pid),
+            );
+            const isFull = equippedPurchased.length >= MAX_LOADOUT_SELECTION;
+            return (
+              <div className="flex flex-col gap-4">
+                {/* Active Purchased Loadout Preview & Controls */}
+                <div className="rounded-xl border border-cyan-500/40 bg-slate-900/95 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <div className="font-display text-xs font-black tracking-wider text-cyan-300">
+                        PURCHASED LOADOUT ({equippedPurchased.length} / {MAX_LOADOUT_SELECTION} EQUIPPED)
+                      </div>
+                      <p className="mt-0.5 text-xs text-slate-300">
+                        Free MCQ Reward Powers (4 slots + Free Surge) appear separately from your Purchased Shop Powers (up to {MAX_LOADOUT_SELECTION} slots, {MAX_BATTLE_POWER_SLOTS} icons total). All {progress.purchasedPowers.length} purchased powers stay saved forever.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={onAutoFillLoadout}
+                        className="rounded-lg border border-cyan-400/60 bg-cyan-600/90 px-3 py-1.5 font-display text-[11px] font-black text-white transition hover:bg-cyan-500"
+                      >
+                        AUTO-FILL
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onClearLoadout}
+                        className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-1.5 font-display text-[11px] font-bold text-slate-300 transition hover:bg-slate-700"
+                      >
+                        CLEAR
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 5-Slot Purchased Bar Preview */}
+                  <div className="mt-3 grid grid-cols-5 gap-2">
+                    {Array.from({ length: MAX_LOADOUT_SELECTION }).map((_, slotIdx) => {
+                      const pid = equippedPurchased[slotIdx];
+                      const pwr = pid ? PLAYER_POWERS[pid] : null;
+                      const qty = pid ? getPurchasedPowerStartQuantity(progress.powerUpgrades, pid) : 0;
+                      return pwr ? (
+                        <button
+                          key={`loadout_slot_${slotIdx}_${pid}`}
+                          type="button"
+                          onClick={() => onToggleLoadoutPower(pid!)}
+                          title={`Remove ${pwr.name} from Loadout`}
+                          className="group relative flex h-14 flex-col items-center justify-center rounded-lg border bg-slate-950 transition hover:border-rose-400"
+                          style={{ borderColor: pwr.color }}
+                        >
+                          <span className="absolute top-0.5 right-1 font-display text-[9px] font-black text-amber-300">
+                            ×{qty}
+                          </span>
+                          <span style={{ color: pwr.color }}>
+                            <PowerIcon type={pwr.icon} className="h-5 w-5" />
+                          </span>
+                          <span className="mt-0.5 font-display text-[8px] font-bold text-slate-300">
+                            SHOP #{slotIdx + 1}
+                          </span>
+                        </button>
+                      ) : (
+                        <div
+                          key={`loadout_empty_${slotIdx}`}
+                          className="flex h-14 flex-col items-center justify-center rounded-lg border border-dashed border-slate-800 bg-slate-950/60 text-slate-600"
+                        >
+                          <span className="font-display text-[9px] font-bold">SHOP #{slotIdx + 1}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Purchased Shop Powers Inventory (Always Preserved) */}
+                {progress.purchasedPowers.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-amber-500/30 bg-slate-900/70 p-6 text-center">
+                    <ShoppingBag className="h-7 w-7 text-amber-400" />
+                    <div className="font-display text-sm font-black text-white">
+                      NO PURCHASED POWERS YET
+                    </div>
+                    <p className="max-w-md text-xs text-slate-300">
+                      Visit the Power Shop to permanently unlock Special, Elite, and Legendary powers with coins. They appear in a separate Purchased Bar during battle!
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => onSwitchModal('shop')}
+                      className="mt-1 rounded-lg bg-amber-500 px-4 py-2 font-display text-xs font-black text-slate-950 hover:bg-amber-400"
+                    >
+                      OPEN POWER SHOP
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {progress.purchasedPowers.map((pid) => {
+                      const pwr = PLAYER_POWERS[pid];
+                      const loadoutIdx = equippedPurchased.indexOf(pid);
+                      const isEquipped = loadoutIdx >= 0;
+                      const disabledAdd = !isEquipped && isFull;
+                      const qty = getPurchasedPowerStartQuantity(progress.powerUpgrades, pid);
+
+                      return (
+                        <div
+                          key={`inv_${pid}`}
+                          data-testid={`loadout-item-${pid}`}
+                          className={`flex items-center justify-between gap-3 rounded-xl border p-3.5 transition ${
+                            isEquipped
+                              ? 'border-cyan-400/75 bg-slate-900/95'
+                              : 'border-slate-800 bg-slate-950/85'
+                          }`}
+                        >
+                          <div className="flex min-w-0 items-center gap-3">
+                            <div
+                              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg text-slate-950"
+                              style={{ backgroundColor: pwr.color }}
+                            >
+                              <PowerIcon type={pwr.icon} className="h-5 w-5" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="truncate font-display text-sm font-black text-white">
+                                  {pwr.name}
+                                </span>
+                                <span className="rounded bg-amber-500/25 px-1.5 py-0.5 font-display text-[9px] font-black text-amber-300">
+                                  SHOP · ×{qty}/MATCH
+                                </span>
+                              </div>
+                              <div className="mt-0.5 flex flex-wrap gap-2 text-[10px] font-bold text-slate-400">
+                                <span className="text-rose-400">DMG {pwr.damage}</span>
+                                <span className="text-cyan-300">TIME {pwr.activeDuration}s</span>
+                                <span className="text-sky-400">CD {pwr.cooldown}s</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            data-testid={`toggle-loadout-${pid}`}
+                            disabled={disabledAdd}
+                            onClick={() => onToggleLoadoutPower(pid)}
+                            className={`shrink-0 rounded-lg px-3 py-2 font-display text-[11px] font-black transition ${
+                              isEquipped
+                                ? 'border border-cyan-400/70 bg-cyan-500 text-slate-950 hover:bg-cyan-400'
+                                : disabledAdd
+                                ? 'cursor-not-allowed bg-slate-800 text-slate-500'
+                                : 'border border-slate-600 bg-slate-800 text-white hover:border-cyan-400 hover:bg-slate-700'
+                            }`}
+                          >
+                            {isEquipped ? `EQUIPPED #${loadoutIdx + 1}` : disabledAdd ? `MAX ${MAX_LOADOUT_SELECTION}` : 'EQUIP'}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* MCQ-Unlocked Powers Summary (Awarded per Match via Science MCQs) */}
+                {mcqCollected.length > 0 && (
+                  <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3.5">
+                    <div className="font-display text-[11px] font-black tracking-wider text-sky-300">
+                      MCQ REWARD COLLECTION ({mcqCollected.length} UNLOCKED · EARNED PER MATCH BY ANSWERING MCQS)
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {mcqCollected.map((pid) => {
+                        const pwr = PLAYER_POWERS[pid];
+                        return (
+                          <span
+                            key={`mcq_col_${pid}`}
+                            className="flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-[10px] font-bold text-slate-200"
+                          >
+                            <span style={{ color: pwr.color }}>
+                              <PowerIcon type={pwr.icon} className="h-3 w-3" />
+                            </span>
+                            <span>{pwr.name}</span>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {activeModal === 'powers' && (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {PLAYER_POWER_LIST.map((pwr) => {
                 const isFree = pwr.id === 'hero_surge';
-                const owned = isFree || progress.collectedPowers.includes(pwr.id);
+                const isShopItem = SHOP_POWER_ID_SET.has(pwr.id);
+                const isPurchased = progress.purchasedPowers.includes(pwr.id);
+                const owned = isFree || isPurchased || progress.collectedPowers.includes(pwr.id);
                 return (
                   <div
                     key={pwr.id}
@@ -395,10 +807,18 @@ export const CollectionModals: React.FC<CollectionModalsProps> = ({
                               className={`rounded px-1.5 py-0.5 font-display text-[10px] font-bold ${
                                 isFree
                                   ? 'bg-amber-400 text-slate-950'
+                                  : isShopItem
+                                  ? 'bg-purple-600/80 text-white'
                                   : 'bg-slate-800 text-slate-300'
                               }`}
                             >
-                              {pwr.id === 'ultimate' ? '[U]' : isFree ? 'FREE' : 'MCQ'}
+                              {pwr.id === 'ultimate'
+                                ? '[U]'
+                                : isFree
+                                ? 'FREE'
+                                : isShopItem
+                                ? 'SHOP'
+                                : 'MCQ'}
                             </span>
                           </div>
                           <div className="font-sinhala text-xs font-semibold text-sky-300">
@@ -413,7 +833,15 @@ export const CollectionModals: React.FC<CollectionModalsProps> = ({
                             : 'bg-slate-800 text-slate-400'
                         }`}
                       >
-                        {isFree ? 'ALWAYS READY' : owned ? 'UNLOCKED' : 'LOCKED'}
+                        {isFree
+                          ? 'ALWAYS READY'
+                          : isPurchased
+                          ? 'PERMANENT'
+                          : owned
+                          ? 'UNLOCKED'
+                          : isShopItem
+                          ? 'SHOP LOCKED'
+                          : 'LOCKED'}
                       </span>
                     </div>
 
@@ -424,6 +852,7 @@ export const CollectionModals: React.FC<CollectionModalsProps> = ({
                     <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-800 pt-2 text-[11px] font-bold">
                       <span className="text-rose-400">DMG: {pwr.damage}</span>
                       <span className="text-amber-400">EN: {pwr.energyCost}</span>
+                      <span className="text-cyan-300">TIME: {pwr.activeDuration}s</span>
                       <span className="text-sky-400">CD: {pwr.cooldown}s</span>
                       <span className="text-emerald-400">{pwr.effectNote}</span>
                     </div>
@@ -525,6 +954,9 @@ export const CollectionModals: React.FC<CollectionModalsProps> = ({
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
               {GRADE_10_SCIENCE_UNITS.map((u) => {
                 const isSelected = progress.selectedUnitId === u.id;
+                const unitTotal = getUnitMcqs(u.id).length;
+                const unitCursor = progress.unitQuestionCursors[u.id] ?? 0;
+                const nextNum = unitTotal > 0 ? (unitCursor % unitTotal) + 1 : 1;
                 return (
                   <button
                     key={u.id}
@@ -536,7 +968,7 @@ export const CollectionModals: React.FC<CollectionModalsProps> = ({
                     }`}
                   >
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span
                           className="rounded px-2 py-0.5 font-display text-[10px] font-black text-slate-950"
                           style={{ backgroundColor: u.themeColor }}
@@ -552,6 +984,9 @@ export const CollectionModals: React.FC<CollectionModalsProps> = ({
                       </div>
                       <div className="font-sinhala mt-1 text-xs text-slate-400">
                         {u.summarySi}
+                      </div>
+                      <div className="mt-1.5 font-display text-[10px] font-bold tabular-nums text-sky-400">
+                        MCQ PROGRESS: NEXT Q{nextNum} / {unitTotal}
                       </div>
                     </div>
                     {isSelected && (

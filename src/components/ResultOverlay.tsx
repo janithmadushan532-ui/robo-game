@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowRight, Award, Crown, Home, Play, RotateCcw, ShieldAlert, Trophy } from 'lucide-react';
+import { ArrowRight, Award, Coins, Crown, Home, Play, RotateCcw, ShieldAlert, Trophy } from 'lucide-react';
 import { BOSS_LEVELS } from '../data/levels';
 import { PLAYER_POWERS } from '../data/powers';
 import { BossLevelDef, GameScreen, LevelMcqSummary } from '../types/game';
@@ -9,6 +9,8 @@ interface ResultOverlayProps {
   screen: GameScreen;
   levelDef: BossLevelDef;
   mcqSummary: LevelMcqSummary;
+  coinsEarned: number;
+  totalCoins: number;
   onResume: () => void;
   onRetryLevel: () => void;
   onNextLevel: () => void;
@@ -19,6 +21,8 @@ export const ResultOverlay: React.FC<ResultOverlayProps> = ({
   screen,
   levelDef,
   mcqSummary,
+  coinsEarned,
+  totalCoins,
   onResume,
   onRetryLevel,
   onNextLevel,
@@ -28,7 +32,10 @@ export const ResultOverlay: React.FC<ResultOverlayProps> = ({
 
   if (screen === 'boss_intro') {
     return (
-      <div className="pointer-events-none absolute inset-0 flex items-end justify-center pb-12">
+      <div
+        className="pointer-events-none absolute inset-0 flex items-end justify-center pb-12"
+        style={{ paddingBottom: 'max(48px, calc(env(safe-area-inset-bottom, 0px) + 32px))' }}
+      >
         <div className="rounded-xl border border-rose-500/60 bg-slate-950/92 px-8 py-4 text-center shadow-2xl">
           <div className="font-display text-xs font-bold tracking-[0.25em] text-amber-400">
             LEVEL {levelDef.level} · SECTOR {levelDef.sector} · {levelDef.arenaName.toUpperCase()}
@@ -63,7 +70,13 @@ export const ResultOverlay: React.FC<ResultOverlayProps> = ({
 
   if (screen === 'paused') {
     return (
-      <div className="game-scroll absolute inset-0 flex items-center justify-center overflow-y-auto bg-slate-950/75 p-3">
+      <div
+        className="game-scroll absolute inset-0 flex items-center justify-center overflow-y-auto bg-slate-950/75 p-3"
+        style={{
+          paddingTop: 'max(12px, env(safe-area-inset-top, 0px))',
+          paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))',
+        }}
+      >
         <div className="my-auto w-full max-w-sm rounded-2xl border border-slate-700 bg-slate-950 p-5 text-center shadow-2xl sm:p-6">
           <h2 className="font-display text-2xl font-black tracking-wider text-white">PAUSED</h2>
           <p className="font-sinhala mt-1 text-xs text-slate-400">
@@ -103,7 +116,13 @@ export const ResultOverlay: React.FC<ResultOverlayProps> = ({
       : null;
 
     return (
-      <div className="game-scroll absolute inset-0 flex items-center justify-center overflow-y-auto bg-slate-950/75 p-3">
+      <div
+        className="game-scroll absolute inset-0 flex items-center justify-center overflow-y-auto bg-slate-950/75 p-3"
+        style={{
+          paddingTop: 'max(12px, env(safe-area-inset-top, 0px))',
+          paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))',
+        }}
+      >
         <div className="my-auto w-full max-w-lg rounded-2xl border border-emerald-500/60 bg-slate-950/96 p-4 shadow-2xl sm:p-6">
           <div className="flex items-center gap-3">
             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/20 text-emerald-400">
@@ -136,9 +155,13 @@ export const ResultOverlay: React.FC<ResultOverlayProps> = ({
               </div>
             </div>
             <div>
-              <div className="text-[10px] font-bold text-slate-400">SCORE REWARD</div>
-              <div className="font-display text-xl font-black tabular-nums text-amber-400">
-                +{levelDef.rewardCoins + mcqSummary.correct * 40}
+              <div className="text-[10px] font-bold text-slate-400">COINS EARNED</div>
+              <div className="flex items-center justify-center gap-1 font-display text-xl font-black tabular-nums text-amber-400">
+                <Coins className="h-4 w-4" />
+                <span>+{coinsEarned}</span>
+              </div>
+              <div className="text-[10px] font-bold tabular-nums text-slate-400">
+                Total: {totalCoins.toLocaleString()}
               </div>
             </div>
           </div>
@@ -211,7 +234,13 @@ export const ResultOverlay: React.FC<ResultOverlayProps> = ({
 
   if (screen === 'defeat') {
     return (
-      <div className="game-scroll absolute inset-0 flex items-center justify-center overflow-y-auto bg-slate-950/75 p-3">
+      <div
+        className="game-scroll absolute inset-0 flex items-center justify-center overflow-y-auto bg-slate-950/75 p-3"
+        style={{
+          paddingTop: 'max(12px, env(safe-area-inset-top, 0px))',
+          paddingBottom: 'max(12px, env(safe-area-inset-bottom, 0px))',
+        }}
+      >
         <div className="my-auto w-full max-w-md rounded-2xl border border-rose-500/60 bg-slate-950/96 p-5 text-center shadow-2xl sm:p-6">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-rose-500/20 text-rose-400">
             <ShieldAlert className="h-8 w-8" />
@@ -221,17 +250,26 @@ export const ResultOverlay: React.FC<ResultOverlayProps> = ({
             {levelDef.bossName} ඔබව පරාජය කළේය. නිවැරදි විද්‍යා පිළිතුරු ලබා දී නැවත සටන් කරන්න!
           </p>
 
-          <div className="mt-4 grid grid-cols-2 gap-2 rounded-xl border border-slate-800 bg-slate-900 p-3 text-xs">
+          <div className="mt-4 grid grid-cols-3 gap-2 rounded-xl border border-slate-800 bg-slate-900 p-3 text-xs">
             <div>
               <div className="text-slate-400">MCQ CORRECT</div>
-              <div className="font-display text-base font-bold text-emerald-400">
+              <div className="font-display text-base font-bold tabular-nums text-emerald-400">
                 {mcqSummary.correct} / {mcqSummary.total}
               </div>
             </div>
             <div>
               <div className="text-slate-400">BOSS BOOSTS</div>
-              <div className="font-display text-base font-bold text-rose-400">
+              <div className="font-display text-base font-bold tabular-nums text-rose-400">
                 +{mcqSummary.wrong}
+              </div>
+            </div>
+            <div>
+              <div className="text-slate-400">COINS EARNED</div>
+              <div className="font-display text-base font-bold tabular-nums text-amber-400">
+                +{coinsEarned}
+              </div>
+              <div className="text-[10px] font-semibold tabular-nums text-slate-400">
+                Total: {totalCoins.toLocaleString()}
               </div>
             </div>
           </div>

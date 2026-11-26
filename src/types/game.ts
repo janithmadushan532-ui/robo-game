@@ -181,7 +181,8 @@ export interface PlayerPowerDef {
   name: string;
   sinhalaName: string;
   damage: number;
-  cooldown: number; // seconds
+  activeDuration: number; // seconds active before auto-deactivating
+  cooldown: number; // seconds recharge after deactivation
   energyCost: number;
   color: string;
   hexColor: number;
@@ -292,9 +293,16 @@ export type ActiveModal =
   | 'levels'
   | 'powers'
   | 'shop'
+  | 'loadout'
   | 'monsters'
   | 'units'
   | 'settings';
+
+export interface ShopPowerDef {
+  powerId: PowerId;
+  price: number;
+  tier: 'SPECIAL' | 'ELITE' | 'LEGENDARY';
+}
 
 export interface GameSettings {
   soundEnabled: boolean;
@@ -307,10 +315,13 @@ export interface SavedProgress {
   highestUnlockedLevel: number;
   defeatedBossIds: string[];
   collectedPowers: PowerId[];
+  purchasedPowers: PowerId[];
+  activeLoadout: PowerId[];
   powerUpgrades: Partial<Record<PowerId, number>>;
   coins: number;
   selectedUnitId: number;
   usedQuestionIds: string[];
+  unitQuestionCursors: Record<number, number>;
   totalWins: number;
   totalCorrectMcq: number;
   totalWrongMcq: number;
@@ -360,7 +371,9 @@ export interface BattleHudSnapshot {
   survivalTotalWaves: number;
   phaseBanner: string | null;
   enemies: EnemyHudState[];
+  powerActiveTimers: Record<PowerId, number>;
   powerCooldowns: Record<PowerId, number>;
+  powerQuantities: Record<PowerId, number>;
   comboCount: number;
   lastDamageEvent: {
     id: number;
